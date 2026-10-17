@@ -1,0 +1,45 @@
+{
+  "timestamp": "2026-10-17T09:36:19+00:00",
+  "rows": 50000,
+  "data_file": "stream_feed.csv",
+  "platform": {
+    "machine": "s390x",
+    "processor": "s390x",
+    "system": "Linux",
+    "release": "6.8.0-147-generic",
+    "python": "3.12.3",
+    "cpu_count": 3
+  },
+  "model": {
+    "n_estimators": 300,
+    "max_depth": 6,
+    "n_features": 19
+  },
+  "end_to_end": {
+    "throughput_txn_per_sec": 11524.4,
+    "elapsed_seconds": 4.339,
+    "latency_ms": {
+      "p50": 0.0588,
+      "p95": 0.0745,
+      "p99": 1.2739,
+      "max": 31.1599,
+      "mean": 0.0865
+    }
+  },
+  "score_only": {
+    "throughput_txn_per_sec": 19646.9,
+    "elapsed_seconds": 2.545,
+    "latency_ms": {
+      "p50": 0.049,
+      "p95": 0.052,
+      "p99": 0.0676,
+      "max": 4.4617,
+      "mean": 0.0507
+    }
+  },
+  "batch": {
+    "throughput_txn_per_sec": 581273.8,
+    "elapsed_seconds": 0.086,
+    "per_txn_ms": 0.00172
+  }
+}

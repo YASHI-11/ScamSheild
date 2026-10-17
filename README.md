@@ -2,7 +2,7 @@
 
 **Real-time detection of digital-payment scams and money-mule accounts — with a human making the final call.**
 
-IBM Z Datathon 2026 · Theme: *Real-Time AI for Critical Decisions* · Built for IBM LinuxONE (s390x)
+IBM Z Datathon 2026 · Theme: _Real-Time AI for Critical Decisions_ · Built for IBM LinuxONE (s390x)
 
 ---
 
@@ -17,22 +17,22 @@ you freeze an honest person's rent payment.
 Two things make this hard:
 
 1. **A single transaction rarely looks criminal.** The fraud lives in the
-   *pattern*: an account that receives money from fourteen strangers in two
+   _pattern_: an account that receives money from fourteen strangers in two
    hours and forwards it on within minutes is a **money mule**, even though
    every individual transfer looks ordinary.
 2. **Static rules are terrible at it.** On our held-out data the classic bank
-   rule — *amount > 200,000 AND the sender's account was drained* — catches
+   rule — _amount > 200,000 AND the sender's account was drained_ — catches
    **7%** of fraud while being **wrong two times out of three** when it fires.
 
 ScamShield scores every payment in **well under a millisecond**, assigns one of three decisions,
 and — crucially — hands the ambiguous ones to a human **with a sentence
 explaining why**, not a number.
 
-| Decision | Tuned for | What happens |
-|---|---|---|
-| `ALLOW` | — | Payment goes through. No human ever sees it. |
-| `REVIEW` | **high recall** | Queued for an analyst. Catch everything; let a person judge. |
-| `BLOCK` | **high precision** | Safe enough to stop the payment automatically. |
+| Decision | Tuned for          | What happens                                                 |
+| -------- | ------------------ | ------------------------------------------------------------ |
+| `ALLOW`  | —                  | Payment goes through. No human ever sees it.                 |
+| `REVIEW` | **high recall**    | Queued for an analyst. Catch everything; let a person judge. |
+| `BLOCK`  | **high precision** | Safe enough to stop the payment automatically.               |
 
 > The analyst is the decision maker. ScamShield's job is to make 30,000
 > transactions into a queue of 12, and to make each of those 12 readable in
@@ -40,12 +40,12 @@ explaining why**, not a number.
 
 ### Who benefits
 
-| | |
-|---|---|
-| **Vulnerable account holders** | Pensioners and first-time digital-payment users, who are disproportionately targeted and least able to absorb the loss. The money is stopped *before* it leaves, not refunded three months later. |
-| **Fraud analysts** | Instead of a spreadsheet of alerts with risk scores, they get a ranked queue with a plain-language reason and three buttons. |
-| **Banks and payment operators** | A measurable cut in false positives — every wrongly blocked payment is a support call and a customer who trusts you less. |
-| **Regulators** | `analyst_actions` is a complete, queryable audit trail: who decided what, when, and what the model's stated reason was. |
+|                                 |                                                                                                                                                                                                   |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Vulnerable account holders**  | Pensioners and first-time digital-payment users, who are disproportionately targeted and least able to absorb the loss. The money is stopped _before_ it leaves, not refunded three months later. |
+| **Fraud analysts**              | Instead of a spreadsheet of alerts with risk scores, they get a ranked queue with a plain-language reason and three buttons.                                                                      |
+| **Banks and payment operators** | A measurable cut in false positives — every wrongly blocked payment is a support call and a customer who trusts you less.                                                                         |
+| **Regulators**                  | `analyst_actions` is a complete, queryable audit trail: who decided what, when, and what the model's stated reason was.                                                                           |
 
 ---
 
@@ -123,7 +123,7 @@ controls, is in [`docs/architecture.md`](docs/architecture.md).
 **`features.py` is imported by both the trainer and the live engine.** There is
 exactly one implementation of every feature. `train.py` replays historical rows
 through `AccountState` in time order; `stream.py` feeds it live transactions.
-This kills *training/serving skew*, the single most common way a fraud model
+This kills _training/serving skew_, the single most common way a fraud model
 quietly stops working in production.
 
 `tests/test_features.py` backs this up by re-deriving every account-level
@@ -134,25 +134,20 @@ streaming version produces identical numbers, row for row.
 
 ## 3. Quick start (laptop — Windows / macOS / Linux)
 
-```bash
+````bash
 pip install -r requirements.txt
 
 # Whole pipeline on synthetic data: no Kaggle account needed, ~1 minute
 ./run_all.sh
 
 # ...or with the real Kaggle PaySim file
-./run_all.sh /path/to/PS_20174392719_1491204439457_log.csv
-```
-
-Then the live demo, in **two terminals**:
-
 ```bash
 # Terminal 1 — the scoring engine
 python stream.py --rate 50
 
 # Terminal 2 — the analyst dashboard
 streamlit run app.py --server.port 8501 --server.address 0.0.0.0
-```
+````
 
 Open <http://localhost:8501>.
 
@@ -169,14 +164,14 @@ python -m pytest tests/ -q                    # the test suite
 
 Useful flags:
 
-| Flag | Effect |
-|---|---|
-| `stream.py --rate 0` | Replay as fast as the machine allows (benchmark mode) |
-| `stream.py --limit 2000` | Stop after N transactions |
-| `stream.py --loop` | Restart the feed when it ends — handy for a long demo |
-| `stream.py --keep` | Append to the existing database instead of starting fresh |
-| `stream.py --no-warmup` | Skip the account-history warm-up (faster, weaker features) |
-| `train.py --csv path.csv` | Train on a different sample |
+| Flag                      | Effect                                                     |
+| ------------------------- | ---------------------------------------------------------- |
+| `stream.py --rate 0`      | Replay as fast as the machine allows (benchmark mode)      |
+| `stream.py --limit 2000`  | Stop after N transactions                                  |
+| `stream.py --loop`        | Restart the feed when it ends — handy for a long demo      |
+| `stream.py --keep`        | Append to the existing database instead of starting fresh  |
+| `stream.py --no-warmup`   | Skip the account-history warm-up (faster, weaker features) |
+| `train.py --csv path.csv` | Train on a different sample                                |
 
 </details>
 
@@ -184,105 +179,157 @@ Useful flags:
 
 ## 4. How ScamShield uses IBM LinuxONE
 
-The theme is *real-time AI for critical decisions*, and the reason this problem
+The theme is _real-time AI for critical decisions_, and the reason this problem
 belongs on a Z-class machine is **the tail, not the average**.
 
-| What LinuxONE gives us | How ScamShield uses it |
-|---|---|
-| **Consistent low latency under load** | A payment decision has a hard deadline. An average of 0.25 ms is useless if the p99 is 400 ms, because the p99 is where the large transactions live. `benchmark.py` reports **p50, p95 and p99** precisely so the tail is visible, and `stream.py` records the latency of *every single transaction* in SQLite. |
-| **Many cores, high memory bandwidth** | `AccountState` holds rolling state for every account in the network. XGBoost is configured with `n_jobs=0` (use every core). Throughput scales with the box. |
-| **Transactions where they already live** | Z runs a large share of the world's card and core-banking workloads. Scoring *next to* the system of record removes a network hop from a 2-second budget — and the data never leaves the platform. |
-| **Portability, proven not claimed** | Identical Python, identical `requirements.txt`. The only architecture-specific thing in the repo is a *measurement*: `platform.machine()`. |
+| What LinuxONE gives us                   | How ScamShield uses it                                                                                                                                                                                                                                                                                          |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Consistent low latency under load**    | A payment decision has a hard deadline. An average of 0.25 ms is useless if the p99 is 400 ms, because the p99 is where the large transactions live. `benchmark.py` reports **p50, p95 and p99** precisely so the tail is visible, and `stream.py` records the latency of _every single transaction_ in SQLite. |
+| **Many cores, high memory bandwidth**    | `AccountState` holds rolling state for every account in the network. XGBoost is configured with `n_jobs=0` (use every core). Throughput scales with the box.                                                                                                                                                    |
+| **Transactions where they already live** | Z runs a large share of the world's card and core-banking workloads. Scoring _next to_ the system of record removes a network hop from a 2-second budget — and the data never leaves the platform.                                                                                                              |
+| **Portability, proven not claimed**      | Identical Python, identical `requirements.txt`. The only architecture-specific thing in the repo is a _measurement_: `platform.machine()`.                                                                                                                                                                      |
 
 **The evidence for the judges is built into the product.** The dashboard has a
-*Running on* panel showing `platform.machine()`, the Python version and the CPU
+_Running on_ panel showing `platform.machine()`, the Python version and the CPU
 count, and it reads them from `stream_meta` — the values recorded by the engine
 that actually did the scoring. On LinuxONE it reads **`s390x`** and the badge
-flips to *✅ IBM LinuxONE (s390x)*. The same string is written into
+flips to _✅ IBM LinuxONE (s390x)_. The same string is written into
 `artifacts/benchmark.json`, so a laptop run and a LinuxONE run are directly
 comparable files.
 
 ### Running on LinuxONE — step by step
 
-The container
-`registry.linuxone.cloud.marist.edu/l1cc/jupyterlab-image-s390x:latest`
-already has **pandas, numpy, scikit-learn, xgboost, pytorch, tensorflow and
-keras** compiled for s390x. Only the dashboard needs installing.
+> **Verified on real hardware.** Every command below was run on an IBM
+> LinuxONE guest (`uname -m` → `s390x`, Ubuntu 24.04, Linux 6.8, 3 cores,
+> 7 GB RAM, Python 3.12.3). The numbers in section 5 come from that machine.
 
-1. **Copy the project into the shared folder.** From your laptop:
+Two kinds of LinuxONE environment behave differently, so pick your path:
 
-   ```bash
-   scp -r ScamShield <user>@<linuxone-host>:~/shared/
-   ```
+| Environment                                                     | Scientific stack  | What to do      |
+| --------------------------------------------------------------- | ----------------- | --------------- |
+| **Marist JupyterLab container** (`l1cc/jupyterlab-image-s390x`) | Pre-installed     | Skip to step 3  |
+| **Bare Ubuntu LinuxONE guest** (what we tested on)              | Nothing installed | Start at step 2 |
 
-   Or drag the folder into the JupyterLab file browser (upload into `~/shared`).
-
-2. **Open a terminal in JupyterLab** — the LinuxONE JupyterLab is on port
-   **38888**: browse to `http://<host>:38888`, then *File → New → Terminal*.
-
-3. **Install just the two dashboard packages** (everything else is already there):
+1. **Copy the project onto the machine.**
 
    ```bash
-   cd ~/shared/ScamShield
-   pip install --user streamlit plotly
+   scp -i <your-key>.pem -r ScamShield linux1@<host>:~/shared/
    ```
 
-   > ⚠️ Do **not** `pip install -r requirements.txt` inside the container. That
-   > would try to rebuild pandas/numpy/xgboost from source on s390x, which takes
-   > an hour or fails. The file lists them so the project installs on a laptop;
-   > on LinuxONE they are pre-installed.
+   In the Marist JupyterLab, drag the folder into the file browser instead.
+   JupyterLab is on port **38888** (`http://<host>:38888`); open a shell with
+   _File → New → Terminal_.
 
-4. **Confirm you are really on Z:**
+2. **Install the scientific stack from apt — not pip.**
+
+   Ubuntu publishes s390x builds of everything ScamShield needs, _including
+   XGBoost_. They install in about a minute, prebuilt:
+
+   ```bash
+   sudo apt-get update
+   sudo apt-get install -y python3-numpy python3-pandas python3-sklearn \
+                           python3-xgboost python3-joblib python3-matplotlib \
+                           python3-pytest python3-pip python3-venv
+   ```
+
+   > ⚠️ **Do not run `pip install -r requirements.txt` here.** On s390x pip
+   > finds no wheels and falls back to compiling NumPy and XGBoost from
+   > source. apt gives you the same packages already built for Z. On Ubuntu
+   > 24.04 `pip install --user` is refused outright anyway (PEP 668,
+   > _externally-managed-environment_).
+
+3. **Confirm you are really on Z:**
 
    ```bash
    python3 -c "import platform; print(platform.machine())"     # -> s390x
    ```
 
-5. **Build the model and benchmark it:**
+4. **Build the model and benchmark it:**
 
    ```bash
+   cd ~/shared/ScamShield
    chmod +x run_all.sh
-   ./run_all.sh                 # synthetic data
-   # or, if you uploaded the Kaggle CSV:
+   ./run_all.sh                 # synthetic data, well under a minute on 3 cores
+   # or, with the Kaggle CSV uploaded:
    ./run_all.sh ~/shared/PS_20174392719_1491204439457_log.csv
    ```
 
-   Keep `artifacts/benchmark.json` — that is your s390x evidence. Save it under
-   a second name so it does not get overwritten:
+   Keep the benchmark as your s390x evidence, and run it three times so you
+   quote a range rather than one lucky number:
 
    ```bash
-   cp artifacts/benchmark.json artifacts/benchmark_linuxone.json
+   for i in 1 2 3; do python3 benchmark.py --out artifacts/benchmark_run$i.json; done
+   cp artifacts/benchmark_run1.json artifacts/benchmark_linuxone.json
    ```
 
-6. **Start the live demo in two terminals:**
+5. **Run the test suite on Z** (25 pass; the dashboard test skips cleanly when
+   Streamlit is absent):
 
    ```bash
-   # Terminal 1
-   python3 stream.py --rate 50 --loop
-
-   # Terminal 2
-   streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+   python3 -m pytest tests/ -q
    ```
 
-7. **Reach the dashboard.** Either forward the port from your laptop:
+6. **Start the scoring engine:**
 
    ```bash
-   ssh -L 8501:localhost:8501 <user>@<linuxone-host>
+   python3 stream.py --rate 50 --loop     # live demo pace
+   python3 stream.py --rate 0             # or unthrottled, full feed
    ```
 
-   then open <http://localhost:8501>; or, if port 8501 is exposed directly, go
-   to `http://<host>:8501`. The *Running on* panel should read **s390x**.
+### The dashboard on s390x — read this before you try
+
+**Streamlit cannot currently be installed on a bare s390x box, and that is not
+a ScamShield limitation.** Streamlit hard-requires `pyarrow`, which publishes
+**no s390x wheel** (the current release ships 50 files; none for s390x) and is
+not in Ubuntu's archive either — installing it means building Apache Arrow C++
+from source. A plain `pip install streamlit` also drags in `libcst`, which
+needs a **Rust** toolchain. Forcing `--only-binary=:all:` makes pip backtrack
+all the way to **streamlit 0.42.0 (2019)**, which predates `st.toggle`,
+`st.fragment`, `st.rerun` and `st.cache_data`, so `app.py` will not run on it.
+
+Two good options:
+
+**Option A — split the demo (recommended; this is what we did).** The engine
+runs on Z, and the dashboard is only a viewer. `stream.py` records
+`platform.machine()` into the `stream_meta` table, so the _Running on_ panel
+reports **s390x** even when the browser is on your laptop — it describes the
+machine that did the scoring, not the one drawing the page.
+
+```bash
+# on LinuxONE
+python3 stream.py --rate 0
+
+# on your laptop
+scp -i <key>.pem linux1@<host>:~/shared/ScamShield/scamshield.db ./linuxone_results/
+SCAMSHIELD_DB=./linuxone_results/scamshield.db streamlit run app.py
+```
+
+Verified output of exactly that: **Architecture s390x · Python 3.12.3 · CPU
+cores 3 · 30,537 transactions · 6,048 txn/s · 62.47M protected.** For a live
+rather than copied view, mount the file over SSHFS or re-copy it periodically.
+
+**Option B — use the Marist JupyterLab container**, which ships a working
+pyarrow for s390x. There `pip install --user streamlit plotly` succeeds and
+everything runs on Z:
+
+```bash
+streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+ssh -L 8501:localhost:8501 linux1@<host>     # from your laptop
+```
 
 <details>
 <summary>Troubleshooting on LinuxONE</summary>
 
-| Symptom | Fix |
-|---|---|
-| `streamlit: command not found` | `pip install --user` puts it in `~/.local/bin`. Run `export PATH=$PATH:~/.local/bin`, or use `python3 -m streamlit run app.py`. |
-| Dashboard says *No database yet* | `stream.py` has not been started, or it is writing elsewhere. Both must run from the same directory. |
-| Port 8501 already taken | `--server.port 8502` and forward that instead. |
-| `train.py` cannot find the CSV | Run from the repo root; every path in `config.py` is relative to it. |
-| Pipeline is slow on the full 6.3M-row CSV | `data/prepare.py` samples it down to 300k first. Run that before `train.py`. |
+| Symptom                                                      | Fix                                                                                                                      |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| `error: externally-managed-environment`                      | Ubuntu 24.04 blocks `pip install --user` (PEP 668). Use apt (step 2), or `python3 -m venv --system-site-packages .venv`. |
+| pip starts compiling NumPy or XGBoost                        | You skipped step 2. Ctrl+C and install from apt instead.                                                                 |
+| `Failed building wheel for libcst` / "needs a Rust compiler" | You are pip-installing Streamlit on s390x. See Option A.                                                                 |
+| `streamlit: command not found`                               | `pip install --user` puts it in `~/.local/bin`: `export PATH=$PATH:~/.local/bin`, or `python3 -m streamlit run app.py`.  |
+| Dashboard says _No database yet_                             | `stream.py` has not run, or is writing elsewhere. Check `SCAMSHIELD_DB`.                                                 |
+| `stream.py` replays far fewer rows than expected             | `artifacts/` holds a stale model — re-run `python3 train.py`.                                                            |
+| Port 8501 already taken                                      | `--server.port 8502`, and forward that port instead.                                                                     |
+| Pipeline slow on the full 6.3M-row CSV                       | Run `data/prepare.py` first; it samples down to 300k.                                                                    |
 
 </details>
 
@@ -290,86 +337,113 @@ keras** compiled for s390x. Only the dashboard needs installing.
 
 ## 5. Results
 
-Measured with `python -m pytest`, `run_all.sh` and `benchmark.py`.
-**Fill the LinuxONE column by running the same commands in the container.**
+Measured with `run_all.sh`, `benchmark.py` and `pytest`, on **both** a laptop
+(x86-64, 12 cores) and a real **IBM LinuxONE guest (s390x, 3 cores)**.
+Raw output is in `artifacts/` and `linuxone_results/`.
 
 ### 5.1 Detection quality
 
 Held-out = the **latest 30% of time steps**, never seen during training.
+Figures below are the LinuxONE run (xgboost 2.0.3); the laptop run
+(xgboost 3.x) agrees to within 0.002 PR-AUC.
 
-| Metric | Rule baseline | **ScamShield** |
-|---|---|---|
-| Recall (fraud caught) | 0.074 | **0.968** |
-| Precision (alerts that were real) | 0.333 | **0.996** |
-| PR-AUC | — | **0.996** |
-| ROC-AUC | — | **0.9998** |
-| Alerts raised per 30k transactions | 120 | **523** |
-| False positives | 80 | **2** |
+| Metric                               | Rule baseline | **ScamShield** |
+| ------------------------------------ | ------------- | -------------- |
+| Recall (fraud caught)                | 0.074         | **0.968**      |
+| Precision (alerts that were real)    | 0.333         | **0.994**      |
+| PR-AUC                               | —             | **0.9946**     |
+| ROC-AUC                              | —             | **0.9997**     |
+| Alerts raised per 30.5k transactions | 120           | **524**        |
+| False positives                      | 80            | **3**          |
 
-<sub>Synthetic PaySim-shaped data: 102,048 rows, 1,702 fraud (1.67%), 71,511 train / 30,537 test.
-Baseline = `amount > 200,000 AND sender drained to zero`. Reproduce with `./run_all.sh`.</sub>
+<sub>Synthetic PaySim-shaped data: 102,048 rows, 1,702 fraud (1.67%),
+71,511 train / 30,537 test, split at step 523. Baseline =
+`amount > 200,000 AND sender drained to zero`. Reproduce with `./run_all.sh`.</sub>
 
-> **Honest caveat:** these numbers come from the *synthetic* generator, whose
-> fraud patterns are cleaner than reality — treat them as a pipeline smoke test,
+> **Honest caveat:** these come from the _synthetic_ generator, whose fraud
+> patterns are cleaner than reality — treat them as a pipeline smoke test,
 > not a claim about real-world performance. The row below is the one that counts.
 
-| Dataset | PR-AUC | Recall @ REVIEW | Precision @ BLOCK | Rule-baseline recall |
-|---|---|---|---|---|
-| Synthetic (this repo, reproducible) | 0.996 | 0.968 | 0.996 | 0.074 |
-| **Real Kaggle PaySim1 (6.3M rows)** | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Dataset                             | PR-AUC | Recall @ REVIEW | Precision @ BLOCK | Rule-baseline recall |
+| ----------------------------------- | ------ | --------------- | ----------------- | -------------------- |
+| Synthetic (this repo, reproducible) | 0.9946 | 0.968           | 0.998             | 0.074                |
+| **Real Kaggle PaySim1 (6.3M rows)** | _TBD_  | _TBD_           | _TBD_             | _TBD_                |
 
 ### 5.2 What the model actually learned
 
 Top features by gain — note that **the two account-level "mule" features are
 doing a third of the work**, which is the entire thesis of the project:
 
-| Rank | Feature | Gain | What it means |
-|---|---|---|---|
-| 1 | `balance_error_dest` | 0.368 | The recipient's ledger does not add up |
-| 2 | **`dest_fanin_senders`** | **0.233** | **Distinct senders → one recipient in N hours (mule collection)** |
-| 3 | `type_CASH_OUT` | 0.104 | The usual last hop before money disappears |
-| 4 | **`orig_rapid_passthrough`** | **0.063** | **Money forwarded on within K hours of arriving** |
-| 5 | `amount` | 0.054 | Size of the payment |
-| 6 | `type_TRANSFER` | 0.053 | Account-to-account |
-| 7 | `orig_drained_to_zero` | 0.043 | Sender emptied |
+| Rank | Feature                      | Gain      | What it means                                                     |
+| ---- | ---------------------------- | --------- | ----------------------------------------------------------------- |
+| 1    | `balance_error_dest`         | 0.368     | The recipient's ledger does not add up                            |
+| 2    | **`dest_fanin_senders`**     | **0.233** | **Distinct senders → one recipient in N hours (mule collection)** |
+| 3    | `type_CASH_OUT`              | 0.104     | The usual last hop before money disappears                        |
+| 4    | **`orig_rapid_passthrough`** | **0.063** | **Money forwarded on within K hours of arriving**                 |
+| 5    | `amount`                     | 0.054     | Size of the payment                                               |
+| 6    | `type_TRANSFER`              | 0.053     | Account-to-account                                                |
+| 7    | `orig_drained_to_zero`       | 0.043     | Sender emptied                                                    |
 
 ### 5.3 Throughput and latency — **laptop vs LinuxONE**
 
-This is the table to fill in during the demo.
+Identical code, identical 50,000 transactions, three consecutive runs on each
+machine. Ranges are min–max across those three runs.
 
-| | Laptop (x86-64) | **LinuxONE (s390x)** |
-|---|---|---|
-| `platform.machine()` | `AMD64` | `s390x` |
-| CPU cores | 12 | _TBD_ |
-| Python | 3.13.9 | _TBD_ |
-| **End-to-end** (features + score + decide) | **1,400 – 2,800 txn/s** | _TBD_ |
-| &nbsp;&nbsp;p50 latency | 0.25 – 0.65 ms | _TBD_ |
-| &nbsp;&nbsp;p95 latency | 0.96 – 1.43 ms | _TBD_ |
-| &nbsp;&nbsp;**p99 latency** | **1.9 – 3.1 ms** | _TBD_ |
-| Score only (model call) | 1,400 – 3,400 txn/s | _TBD_ |
-| Batch (whole matrix at once) | 0.45M – 1.5M txn/s | _TBD_ |
-| Model training time | 3.8 s | _TBD_ |
+|                                            | Laptop (x86-64)     | **LinuxONE (s390x)**      |
+| ------------------------------------------ | ------------------- | ------------------------- |
+| `platform.machine()`                       | `AMD64`             | **`s390x`**               |
+| CPU cores                                  | 12                  | **3**                     |
+| Python                                     | 3.13.9              | 3.12.3                    |
+| **End-to-end** (features + score + decide) | 1,434 – 2,762 txn/s | **11,524 – 12,021 txn/s** |
+| &nbsp;&nbsp;p50 latency                    | 0.25 – 0.65 ms      | **0.058 – 0.059 ms**      |
+| &nbsp;&nbsp;p95 latency                    | 0.96 – 1.43 ms      | **0.067 – 0.074 ms**      |
+| &nbsp;&nbsp;**p99 latency**                | 1.90 – 3.14 ms      | **1.262 – 1.274 ms**      |
+| Score only (model call)                    | 1,437 – 3,444 txn/s | **19,392 – 19,758 txn/s** |
+| Batch (whole matrix at once)               | 0.45M – 1.5M txn/s  | 0.58M – 0.60M txn/s       |
+| Model training (300 trees)                 | 3.8 s               | **1.8 s**                 |
+| Full pipeline (`run_all.sh`)               | ~12 s               | **~9 s**                  |
 
-<sub>50,000 transactions, 300 trees, depth 6, 19 features, single process.
-Ranges are the min–max across three consecutive runs. Run `python benchmark.py`;
-raw output in `artifacts/benchmark.json`.</sub>
+<sub>300 trees, depth 6, 19 features, single process. LinuxONE guest: Ubuntu
+24.04, Linux 6.8, 7 GB RAM. Raw JSON in `linuxone_results/benchmark_run{1,2,3}.json`.</sub>
 
-> **Why a range, not one number.** Three identical runs on this laptop varied
-> by nearly 2× — a thermally-throttled, multi-tenant consumer machine is simply
-> not a stable measurement platform. That variance *is* the argument: a payment
-> decision has a hard deadline, so what matters is not the best number you can
-> produce but the worst one you can guarantee. Record the LinuxONE column by
-> running `benchmark.py` three times in the container and quoting the same
-> min–max, so the comparison is like for like.
+**LinuxONE is 4–8× faster end-to-end on a quarter of the cores.** But the
+throughput is not the interesting number — this is:
 
-Even at the slowest observed **p99**, a decision lands in about 3 ms — under
-**0.2%** of the two-second payment budget.
+|                                | Laptop   | **LinuxONE** |
+| ------------------------------ | -------- | ------------ |
+| Spread across 3 identical runs | **1.9×** | **1.04×**    |
+| p95 ÷ p50 (tail vs typical)    | 2.2–3.8× | **1.15×**    |
+
+The laptop's throughput nearly halved between runs and its p95 was up to
+~4× its median. On Z the three runs landed within 4% of each other and p95
+sat 15% above p50 — an almost flat tail. A payment decision has a hard
+deadline, so the figure that matters is not the best you can produce but the
+worst you can guarantee. That is the entire argument for running this
+workload on Z, and it is the one thing a laptop benchmark cannot fake.
+
+### 5.3b Live streaming run on s390x
+
+Full held-out feed replayed through `stream.py --rate 0`, scoring and writing
+every decision to SQLite:
+
+|                                        |                                     |
+| -------------------------------------- | ----------------------------------- |
+| Transactions replayed                  | 30,537                              |
+| Wall clock                             | 5.1 s                               |
+| Throughput **including SQLite writes** | 6,001 txn/s                         |
+| Scoring latency p50 / p95 / p99        | 0.068 / 0.372 / 1.329 ms            |
+| Decisions                              | 30,013 ALLOW · 9 REVIEW · 515 BLOCK |
+| Fraud caught                           | 521 of 538 (96.8%)                  |
+| Money protected                        | **62,473,305**                      |
+
+Test suite on s390x: **25 passed, 1 skipped** (the dashboard test skips
+cleanly when Streamlit is unavailable — see section 4).
 
 ### 5.4 Cost of being wrong
 
-Over a single replay of the test window the `BLOCK` tier stopped
-**62.4M** in fraudulent payments. The dashboard tracks this live as
-*Money protected*, alongside *Money that still got through* — because a fraud
+Over a single replay of the test window on LinuxONE the `BLOCK` tier stopped
+**62,473,305** in fraudulent payments, while 518K still got through. The dashboard tracks this live as
+_Money protected_, alongside _Money that still got through_ — because a fraud
 system that only reports its wins is not telling you the truth.
 
 ---
@@ -406,19 +480,19 @@ ScamShield/
 <details>
 <summary><b>No data leakage — four separate controls</b></summary>
 
-| Risk | Control |
-|---|---|
-| Training on the future | Time-based split on `step`. Never `train_test_split(shuffle=True)`. |
+| Risk                        | Control                                                                                                                                                                                                                             |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Training on the future      | Time-based split on `step`. Never `train_test_split(shuffle=True)`.                                                                                                                                                                 |
 | A transaction seeing itself | `features(txn)` is always called **before** `update(txn)`. Tested by `test_no_lookahead_future_rows_cannot_change_the_past`, which replays one prefix with two different futures and asserts the prefix features are bit-identical. |
-| A label hiding in a column | `isFlaggedFraud` — the bank's own legacy rule — is excluded from the feature set. |
-| Cold-start skew | `stream.py` warms `AccountState` on the training rows before the demo, so live features carry the same account history the model learned with. |
+| A label hiding in a column  | `isFlaggedFraud` — the bank's own legacy rule — is excluded from the feature set.                                                                                                                                                   |
+| Cold-start skew             | `stream.py` warms `AccountState` on the training rows before the demo, so live features carry the same account history the model learned with.                                                                                      |
 
 </details>
 
 <details>
 <summary><b>Why XGBoost's <code>pred_contribs</code> instead of the <code>shap</code> package</b></summary>
 
-`pred_contribs=True` *is* TreeSHAP — it ships inside XGBoost, which is already
+`pred_contribs=True` _is_ TreeSHAP — it ships inside XGBoost, which is already
 installed on the LinuxONE image. Adding the `shap` package would mean compiling
 a C extension for s390x for exactly zero extra capability.
 
@@ -427,7 +501,7 @@ so one booster call gives both the score and the explanation. But explanations
 are only needed for transactions a human will see, so `scorer.py` runs the cheap
 `inplace_predict` path on **every** transaction and only pays for TreeSHAP on
 the ~2% that get flagged. That is most of the difference between the
-*end-to-end* and *score only* rows in the benchmark table.
+_end-to-end_ and _score only_ rows in the benchmark table.
 
 </details>
 
@@ -438,11 +512,11 @@ Not hand-picked. `train.py` reads them off the precision-recall curve of the
 held-out set:
 
 - **REVIEW** = the strictest threshold that still achieves
-  `TARGET_REVIEW_RECALL` (0.95). Optimises for *missing nothing*; a human
+  `TARGET_REVIEW_RECALL` (0.95). Optimises for _missing nothing_; a human
   triages the queue.
 - **BLOCK** = the loosest threshold whose precision reaches
-  `TARGET_BLOCK_PRECISION` (0.95). Optimises for *never freezing an honest
-  payment*, because that is the action taken without a human.
+  `TARGET_BLOCK_PRECISION` (0.95). Optimises for _never freezing an honest
+  payment_, because that is the action taken without a human.
 
 Both are saved to `artifacts/model_metadata.json` and loaded by `scorer.py`, so
 the running system cannot drift from the evaluated one. Adjust the targets in
@@ -492,18 +566,18 @@ never shows an empty reason.
 
 ## 8. Open-source libraries used
 
-| Library | Licence | Used for | Link |
-|---|---|---|---|
-| **XGBoost** | Apache-2.0 | Gradient-boosted classifier; `pred_contribs` TreeSHAP explanations | <https://github.com/dmlc/xgboost> |
-| **scikit-learn** | BSD-3-Clause | PR curve, average precision, confusion matrix, threshold selection | <https://github.com/scikit-learn/scikit-learn> |
-| **pandas** | BSD-3-Clause | CSV loading, stratified sampling, time ordering | <https://github.com/pandas-dev/pandas> |
-| **NumPy** | BSD-3-Clause | Feature vectors, percentiles | <https://github.com/numpy/numpy> |
-| **Streamlit** | Apache-2.0 | The analyst dashboard | <https://github.com/streamlit/streamlit> |
-| **Plotly** | MIT | Alerts-over-time and score-distribution charts | <https://github.com/plotly/plotly.py> |
-| **joblib** | BSD-3-Clause | Model serialisation | <https://github.com/joblib/joblib> |
-| **Matplotlib** *(optional)* | PSF-based | `pr_curve.png`; skipped gracefully if absent | <https://github.com/matplotlib/matplotlib> |
-| **pytest** | MIT | Test suite | <https://github.com/pytest-dev/pytest> |
-| **SQLite** (stdlib `sqlite3`) | Public domain | WAL-mode store for transactions and analyst actions | <https://www.sqlite.org/> |
+| Library                       | Licence       | Used for                                                           | Link                                           |
+| ----------------------------- | ------------- | ------------------------------------------------------------------ | ---------------------------------------------- |
+| **XGBoost**                   | Apache-2.0    | Gradient-boosted classifier; `pred_contribs` TreeSHAP explanations | <https://github.com/dmlc/xgboost>              |
+| **scikit-learn**              | BSD-3-Clause  | PR curve, average precision, confusion matrix, threshold selection | <https://github.com/scikit-learn/scikit-learn> |
+| **pandas**                    | BSD-3-Clause  | CSV loading, stratified sampling, time ordering                    | <https://github.com/pandas-dev/pandas>         |
+| **NumPy**                     | BSD-3-Clause  | Feature vectors, percentiles                                       | <https://github.com/numpy/numpy>               |
+| **Streamlit**                 | Apache-2.0    | The analyst dashboard                                              | <https://github.com/streamlit/streamlit>       |
+| **Plotly**                    | MIT           | Alerts-over-time and score-distribution charts                     | <https://github.com/plotly/plotly.py>          |
+| **joblib**                    | BSD-3-Clause  | Model serialisation                                                | <https://github.com/joblib/joblib>             |
+| **Matplotlib** _(optional)_   | PSF-based     | `pr_curve.png`; skipped gracefully if absent                       | <https://github.com/matplotlib/matplotlib>     |
+| **pytest**                    | MIT           | Test suite                                                         | <https://github.com/pytest-dev/pytest>         |
+| **SQLite** (stdlib `sqlite3`) | Public domain | WAL-mode store for transactions and analyst actions                | <https://www.sqlite.org/>                      |
 
 **Dataset:** [PaySim1](https://www.kaggle.com/datasets/ealaxi/paysim1) — synthetic
 mobile-money transactions by Lopez-Rojas, Elmir & Axelsson, derived from real
@@ -516,22 +590,27 @@ anywhere in this project.
 
 **Total 3:00. Have both terminals already running before you hit record.**
 
-| Time | Section | What is on screen | What you say |
-|---|---|---|---|
-| **0:00–0:30** | **The problem** | A slide: a UPI confirmation screen, and a clock showing 2 seconds. | "A digital payment settles in two seconds. In that window a bank must decide: grocery bill, or a pensioner's savings going to a criminal? The fraud is almost never in one transaction — it's in the pattern. One account taking money from fourteen strangers in two hours and forwarding it within minutes is a money mule. Today most banks catch that with static rules. On our data, that rule finds **7%** of fraud and is wrong two times out of three." |
-| **0:30–1:00** | **Data & approach** | `features.py` on screen, scroll to `AccountState`. Then the architecture diagram. | "We use PaySim — 6.3 million synthetic mobile-money transactions. Transaction-level signals are the easy part. The interesting features are account-level and rolling: fan-in, rapid pass-through, account age. They're computed incrementally, so this one class runs in both training and production — no training/serving skew. We test that: a naive O(n²) reference gets the same numbers as the streaming version, row for row." |
-| **1:00–2:00** | **Live demo** ⭐ | The dashboard, with `stream.py` visibly running beside it. Let the table scroll. | "This is live. Transactions are arriving and being scored right now. p50 latency: well under a millisecond. Green passes through, amber goes to a human, red is auto-blocked. Here's the point —" *(click a queue item)* "— the analyst doesn't get a risk score of 0.97. They get: *'Account drained to zero; recipient received money from 14 different senders in 12 hours; money forwarded on within 2 hours of arriving.'* Approve, Block, or Escalate." *(click Block)* "Every press goes to an audit table — that's the regulator's trail and the next model's training data." |
-| **2:00–2:30** | **LinuxONE evidence** 🏆 | Zoom on the *Running on* panel showing **s390x**. Then `cat artifacts/benchmark.json` in the terminal. | "All of this is running on IBM LinuxONE. The dashboard reads `platform.machine()` from the process that did the scoring: **s390x**. Same code as my laptop, zero changes. And look at the number that matters — not the average, the **p99**: a couple of milliseconds. A payment decision has a hard deadline, so the tail is the whole game. Z gives us that tail, next to where the transactions already live." |
-| **2:30–3:00** | **Impact & close** | The *Money protected* KPI, then the results table. | "Against the rule baseline: recall from 7% to 97%, false positives from 80 down to 2 — and in one replay, **62 million** in fraud stopped before it left. Every blocked payment is a person who keeps their savings; every false positive we remove is an honest person not locked out of their own money. Real-time AI, a human making the critical call, and an audit trail for both. That's ScamShield."
+| Time          | Section                  | What is on screen                                                                                               | What you say                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **0:00–0:30** | **The problem**          | A slide: a UPI confirmation screen, and a clock showing 2 seconds.                                              | "A digital payment settles in two seconds. In that window a bank must decide: grocery bill, or a pensioner's savings going to a criminal? The fraud is almost never in one transaction — it's in the pattern. One account taking money from fourteen strangers in two hours and forwarding it within minutes is a money mule. Today most banks catch that with static rules. On our data, that rule finds **7%** of fraud and is wrong two times out of three."                                                                                                                                                                         |
+| **0:30–1:00** | **Data & approach**      | `features.py` on screen, scroll to `AccountState`. Then the architecture diagram.                               | "We use PaySim — 6.3 million synthetic mobile-money transactions. Transaction-level signals are the easy part. The interesting features are account-level and rolling: fan-in, rapid pass-through, account age. They're computed incrementally, so this one class runs in both training and production — no training/serving skew. We test that: a naive O(n²) reference gets the same numbers as the streaming version, row for row."                                                                                                                                                                                                  |
+| **1:00–2:00** | **Live demo** ⭐         | The dashboard, with `stream.py` visibly running beside it. Let the table scroll.                                | "This is live. Transactions are arriving and being scored right now. p50 latency: well under a millisecond. Green passes through, amber goes to a human, red is auto-blocked. Here's the point —" _(click a queue item)_ "— the analyst doesn't get a risk score of 0.97. They get: _'Account drained to zero; recipient received money from 14 different senders in 12 hours; money forwarded on within 2 hours of arriving.'_ Approve, Block, or Escalate." _(click Block)_ "Every press goes to an audit table — that's the regulator's trail and the next model's training data."                                                   |
+| **2:00–2:30** | **LinuxONE evidence** 🏆 | Zoom on the _Running on_ panel showing **s390x**. Then `cat artifacts/benchmark_linuxone.json` in the terminal. | "All of this ran on IBM LinuxONE. The dashboard reads `platform.machine()` from the process that did the scoring: **s390x**. Same code as my laptop, zero changes — the only architecture-specific line in the repo is the one that _measures_ the architecture. And it's not just faster, it's **steadier**: three identical runs on my laptop varied by nearly two times, and its p95 was up to four times its median. On Z, three runs landed within four percent, and p95 sat fifteen percent above p50. A payment has a hard deadline, so what matters isn't your best number — it's your worst one. That's the whole case for Z." |
+| **2:30–3:00** | **Impact & close**       | The _Money protected_ KPI, then the results table.                                                              | "Against the rule baseline: recall from 7% to 97%, false positives from 80 down to 3 — and in one replay on Z, **62.4 million** in fraud stopped before it left. Every blocked payment is a person who keeps their savings; every false positive we remove is an honest person not locked out of their own money. Real-time AI, a human making the critical call, and an audit trail for both. That's ScamShield."                                                                                                                                                                                                                      |
 
 **Recording tips**
 
 - Start `stream.py --rate 50 --loop` a minute before recording so the charts
   have history and the queue is populated.
-- Turn **off** *Live refresh* in the sidebar before clicking queue buttons, so
+- Turn **off** _Live refresh_ in the sidebar before clicking queue buttons, so
   the page does not reload mid-click.
 - The money figure and the s390x badge are the two shots judges remember —
   hold each for a full three seconds.
+- On a bare s390x box the dashboard runs on your laptop against the database
+  the Z engine wrote (section 4, Option A). It still reports **s390x**,
+  because that string comes from the machine that did the scoring. Say so
+  out loud — it is a stronger, more honest line than pretending the browser
+  is on Z.
 
 ---
 
@@ -546,6 +625,11 @@ anywhere in this project.
   production deployment needs TTL eviction for dormant accounts.
 - **Single-process.** Throughput scales with cores inside one process, not
   across machines. Sharding by account hash is the obvious next step.
+- **The dashboard cannot run on a bare s390x host.** Streamlit requires
+  pyarrow, which has no s390x wheel and no Ubuntu package. The engine, model,
+  benchmark and tests all run natively on Z; only the viewer has to live
+  elsewhere (section 4, Option A). The Marist JupyterLab image does ship
+  pyarrow, so there the whole stack runs on Z.
 - **Ground-truth labels are shown in the dashboard** because we are replaying a
   labelled dataset. In production that column does not exist — which is exactly
   why the analyst feedback loop is in the design and not an afterthought.

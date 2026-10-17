@@ -1,13 +1,22 @@
 # ScamShield dependencies
 #
-# The IBM LinuxONE image
-#   registry.linuxone.cloud.marist.edu/l1cc/jupyterlab-image-s390x:latest
-# ALREADY ships pandas, numpy, scikit-learn and xgboost compiled for s390x.
-# Do NOT pip-install or upgrade those inside the container - you will trigger
-# a source build that either takes an hour or fails outright.
+# ON IBM LinuxONE (s390x), DO NOT USE THIS FILE WITH pip.
+# ----------------------------------------------------------------------
+# There are no s390x wheels on PyPI for numpy/scikit-learn/xgboost, so pip
+# falls back to compiling them from source. Use the OS packages instead:
 #
-# Inside the container you only need:
-#     pip install --user streamlit plotly
+#   Bare Ubuntu LinuxONE guest (verified on Ubuntu 24.04 / s390x):
+#     sudo apt-get install -y python3-numpy python3-pandas python3-sklearn \
+#                             python3-xgboost python3-joblib \
+#                             python3-matplotlib python3-pytest
+#     (Ubuntu 24.04 also refuses `pip install --user` outright - PEP 668.)
+#
+#   Marist JupyterLab image (l1cc/jupyterlab-image-s390x):
+#     already has all of the above; only `pip install --user streamlit plotly`
+#
+# Streamlit + plotly are NOT installable on a bare s390x box: streamlit
+# requires pyarrow, which publishes no s390x wheel and is not in the Ubuntu
+# archive. See README section 4 for the split-demo workaround.
 #
 # This file exists so the project installs cleanly on a laptop and so the
 # judges can see exactly what it depends on.

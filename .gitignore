@@ -17,6 +17,11 @@ data/*.csv
 artifacts/*
 !artifacts/.gitkeep
 
+# LinuxONE evidence: keep the JSON, skip the 6 MB database
+linuxone_results/*.db
+linuxone_results/*.db-wal
+linuxone_results/*.db-shm
+
 # Runtime database
 scamshield.db
 scamshield.db-wal

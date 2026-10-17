@@ -1,0 +1,132 @@
+{
+  "dataset": {
+    "file": "paysim_sample.csv",
+    "rows": 102048,
+    "fraud_rows": 1702,
+    "fraud_rate": 0.016678,
+    "step_min": 1,
+    "step_max": 744
+  },
+  "split": {
+    "type": "time-based (no random split)",
+    "split_step": 523,
+    "train_rows": 71511,
+    "train_fraud": 1164,
+    "test_rows": 30537,
+    "test_fraud": 538
+  },
+  "model": {
+    "algorithm": "XGBClassifier",
+    "params": {
+      "n_estimators": 300,
+      "max_depth": 6,
+      "learning_rate": 0.15,
+      "subsample": 0.9,
+      "colsample_bytree": 0.9,
+      "min_child_weight": 1,
+      "reg_lambda": 1.0,
+      "objective": "binary:logistic",
+      "eval_metric": "aucpr",
+      "tree_method": "hist",
+      "n_jobs": 0,
+      "random_state": 42
+    },
+    "scale_pos_weight": 60.44,
+    "train_seconds": 1.88
+  },
+  "scores": {
+    "pr_auc": 0.9946,
+    "roc_auc": 0.9997
+  },
+  "review_tier": {
+    "threshold": 0.99,
+    "precision": 0.9943,
+    "recall": 0.9684,
+    "flagged": 524,
+    "flagged_rate": 0.01716,
+    "confusion_matrix": {
+      "tn": 29996,
+      "fp": 3,
+      "fn": 17,
+      "tp": 521
+    }
+  },
+  "block_tier": {
+    "threshold": 0.999,
+    "precision": 0.9981,
+    "recall": 0.9554,
+    "flagged": 515,
+    "flagged_rate": 0.016865,
+    "confusion_matrix": {
+      "tn": 29998,
+      "fp": 1,
+      "fn": 24,
+      "tp": 514
+    }
+  },
+  "rule_baseline": {
+    "rule": "amount > 200,000 AND sender drained to zero",
+    "precision": 0.3333,
+    "recall": 0.0743,
+    "pr_auc": 0.0411,
+    "flagged": 120,
+    "confusion_matrix": {
+      "tn": 29919,
+      "fp": 80,
+      "fn": 498,
+      "tp": 40
+    }
+  },
+  "money": {
+    "auto_blocked_in_test_window": 62473305.19,
+    "missed_in_test_window": 705778.04
+  },
+  "feature_importance_top10": [
+    {
+      "feature": "balance_error_dest",
+      "gain": 0.45875
+    },
+    {
+      "feature": "orig_drained_to_zero",
+      "gain": 0.10141
+    },
+    {
+      "feature": "type_CASH_OUT",
+      "gain": 0.09009
+    },
+    {
+      "feature": "orig_rapid_passthrough",
+      "gain": 0.0739
+    },
+    {
+      "feature": "type_TRANSFER",
+      "gain": 0.06893
+    },
+    {
+      "feature": "type_CASH_IN",
+      "gain": 0.06754
+    },
+    {
+      "feature": "amount",
+      "gain": 0.03814
+    },
+    {
+      "feature": "log_amount",
+      "gain": 0.03624
+    },
+    {
+      "feature": "dest_rapid_passthrough",
+      "gain": 0.02293
+    },
+    {
+      "feature": "dest_fanin_senders",
+      "gain": 0.01171
+    }
+  ],
+  "platform": {
+    "machine": "s390x",
+    "python": "3.12.3",
+    "system": "Linux"
+  },
+  "total_seconds": 3.24
+}

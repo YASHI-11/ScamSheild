@@ -57,18 +57,18 @@ ACTION_LABELS = {"APPROVE": "Approve", "BLOCK": "Block", "ESCALATE": "Escalate"}
 # if you want to take a screenshot without the page moving under you.
 AUTO_REFRESH = os.environ.get("SCAMSHIELD_NO_AUTOREFRESH", "") != "1"
 
+# Keep every line flush left: Markdown renders 4-space-indented lines as a
+# code block, which would print this stylesheet onto the page as text.
 st.markdown(
-    """
-    <style>
-      .block-container {padding-top: 2rem; padding-bottom: 2rem;}
-      div[data-testid="stMetricValue"] {font-size: 1.6rem;}
-      .ss-alert {border-left: 5px solid #b3261e; padding: 0.6rem 0.9rem;
-                 border-radius: 6px; margin-bottom: 0.4rem;}
-      .ss-review {border-left-color: #b26a00;}
-      .ss-reason {font-size: 0.92rem; opacity: 0.92;}
-      .ss-meta {font-size: 0.8rem; opacity: 0.7;}
-    </style>
-    """,
+"""<style>
+.block-container {padding-top: 2rem; padding-bottom: 2rem;}
+div[data-testid="stMetricValue"] {font-size: 1.6rem;}
+.ss-alert {border-left: 5px solid #b3261e; padding: 0.6rem 0.9rem;
+border-radius: 6px; margin-bottom: 0.4rem;}
+.ss-review {border-left-color: #b26a00;}
+.ss-reason {font-size: 0.92rem; opacity: 0.92;}
+.ss-meta {font-size: 0.8rem; opacity: 0.7;}
+</style>""",
     unsafe_allow_html=True,
 )
 
@@ -312,16 +312,22 @@ with queue_col:
         css = "ss-alert" + ("" if decision == "BLOCK" else " ss-review")
         actioned = row.get("analyst_action")
 
+        # NOTE: build this as ONE unindented line.  Markdown turns any line
+        # indented by 4+ spaces into a code block, which previously made the
+        # closing </div></div> render as literal text on the page.
+        actioned_html = (
+            f" &nbsp;·&nbsp; already actioned: <b>{actioned}</b>" if actioned else ""
+        )
+        summary_html = row["summary"] or "No summary available."
         st.markdown(
-            f"""<div class="{css}" style="background:{DECISION_BG[decision]}">
-            <b>{decision}</b> &nbsp;·&nbsp; <b>{money(row['amount'])}</b>
-            &nbsp;·&nbsp; risk <b>{row['score']:.3f}</b>
-            &nbsp;·&nbsp; {row['type']}
-            <div class="ss-reason">{row['summary'] or 'No summary available.'}</div>
-            <div class="ss-meta">#{txn_id} &nbsp; {row['name_orig']} → {row['name_dest']}
-            &nbsp; step {int(row['step'])}
-            {' &nbsp;·&nbsp; already actioned: <b>' + str(actioned) + '</b>' if actioned else ''}
-            </div></div>""",
+            f'<div class="{css}" style="background:{DECISION_BG[decision]}">'
+            f'<b>{decision}</b> &nbsp;·&nbsp; <b>{money(row["amount"])}</b>'
+            f' &nbsp;·&nbsp; risk <b>{row["score"]:.3f}</b>'
+            f' &nbsp;·&nbsp; {row["type"]}'
+            f'<div class="ss-reason">{summary_html}</div>'
+            f'<div class="ss-meta">#{txn_id} &nbsp; {row["name_orig"]} &rarr; '
+            f'{row["name_dest"]} &nbsp; step {int(row["step"])}{actioned_html}</div>'
+            f'</div>',
             unsafe_allow_html=True,
         )
 

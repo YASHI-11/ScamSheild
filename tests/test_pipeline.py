@@ -26,10 +26,13 @@ import explain  # noqa: E402
 import features as F  # noqa: E402
 
 
-def run(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
+def run(args: list[str], cwd: Path, home: Path | None = None) -> subprocess.CompletedProcess:
     """Run one pipeline stage as a subprocess, exactly as a user would."""
+    env = dict(os.environ)
+    if home is not None:
+        env["SCAMSHIELD_HOME"] = str(home)
     proc = subprocess.run(
-        [sys.executable, *args], cwd=str(cwd),
+        [sys.executable, *args], cwd=str(cwd), env=env,
         capture_output=True, text=True, timeout=900,
     )
     if proc.returncode != 0:
@@ -43,27 +46,52 @@ def run(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
 @pytest.fixture(scope="module")
 def pipeline(tmp_path_factory):
     """
-    Run make_synthetic -> train -> stream in an isolated working directory.
+    Run make_synthetic -> train -> stream against an isolated SCAMSHIELD_HOME.
 
-    config.py resolves every path relative to the repo root, so instead of
-    copying the code we point each stage at files inside tmp via its CLI
-    flags, and keep the real artifacts/ and scamshield.db untouched.
+    Every stage writes its artifacts and generated feeds under a temp
+    directory, so running the test suite can never overwrite the model,
+    feeds or database you built for the demo.  (It used to: `pytest` would
+    retrain into artifacts/ with 9k rows and silently replace a full-size
+    model, which then made stream.py replay the wrong feed.)
     """
     work = tmp_path_factory.mktemp("scamshield")
+    home = work / "home"
+    (home / "data").mkdir(parents=True)
+    (home / "artifacts").mkdir(parents=True)
     sample = work / "sample.csv"
     db_file = work / "test.db"
 
-    run(["data/make_synthetic.py", "--rows", "9000", "--out", str(sample)], ROOT)
+    run(["data/make_synthetic.py", "--rows", "9000", "--out", str(sample)], ROOT, home)
     assert sample.exists()
 
-    train = run(["train.py", "--csv", str(sample)], ROOT)
+    train = run(["train.py", "--csv", str(sample)], ROOT, home)
     stream = run(["stream.py", "--rate", "0", "--limit", "1200",
-                  "--db", str(db_file)], ROOT)
+                  "--db", str(db_file)], ROOT, home)
 
-    return {
-        "work": work, "sample": sample, "db": db_file,
+    # Point this process's own config at the same isolated home, so the
+    # assertions below read the artifacts the subprocesses just wrote.
+    import importlib
+    os.environ["SCAMSHIELD_HOME"] = str(home)
+    importlib.reload(config)
+
+    yield {
+        "work": work, "home": home, "sample": sample, "db": db_file,
         "train_out": train.stdout, "stream_out": stream.stdout,
     }
+
+    os.environ.pop("SCAMSHIELD_HOME", None)
+    importlib.reload(config)
+
+
+def test_tests_do_not_touch_the_real_artifacts(pipeline):
+    """Guard the guard: everything this suite wrote must live under tmp."""
+    home = pipeline["home"]
+    for path in (config.MODEL_PATH, config.METRICS_PATH,
+                 config.STREAM_CSV, config.WARMUP_CSV):
+        assert home in path.parents or str(path).startswith(str(home)), (
+            f"{path} escaped the isolated SCAMSHIELD_HOME"
+        )
+        assert ROOT not in path.parents, f"{path} would clobber the real repo"
 
 
 # ----------------------------------------------------------------------

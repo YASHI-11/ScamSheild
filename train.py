@@ -177,6 +177,7 @@ def main() -> int:
         return 1
 
     config.ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    config.DATA_DIR.mkdir(parents=True, exist_ok=True)
     t_start = time.perf_counter()
 
     # --- 1. load, time order -------------------------------------------

@@ -4,6 +4,7 @@ ScamShield - central configuration.
 Every path here is RELATIVE to the repository root so the project behaves the
 same on a Windows/Mac laptop and on IBM LinuxONE (s390x) inside the container.
 """
+import os
 from pathlib import Path
 
 # --------------------------------------------------------------------------
@@ -11,8 +12,15 @@ from pathlib import Path
 # --------------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parent
 
-DATA_DIR = ROOT / "data"
-ARTIFACT_DIR = ROOT / "artifacts"
+# Where generated files go.  Normally the repo itself, but setting
+# SCAMSHIELD_HOME redirects every OUTPUT (artifacts, generated feeds, the
+# database) somewhere else.  The test suite relies on this: without it,
+# running `pytest` would retrain into artifacts/ and overwrite the model and
+# feeds you just built for the demo.
+HOME = Path(os.environ.get("SCAMSHIELD_HOME", ROOT)).resolve()
+
+DATA_DIR = HOME / "data"
+ARTIFACT_DIR = HOME / "artifacts"
 
 # PaySim sample produced by data/prepare.py (or data/make_synthetic.py)
 SAMPLE_CSV = DATA_DIR / "paysim_sample.csv"
@@ -31,7 +39,7 @@ PR_CURVE_CSV = ARTIFACT_DIR / "pr_curve.csv"
 BENCHMARK_PATH = ARTIFACT_DIR / "benchmark.json"
 ONNX_PATH = ARTIFACT_DIR / "model.onnx"
 
-DB_PATH = ROOT / "scamshield.db"
+DB_PATH = HOME / "scamshield.db"
 
 # --------------------------------------------------------------------------
 # Data preparation

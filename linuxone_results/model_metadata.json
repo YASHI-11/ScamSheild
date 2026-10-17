@@ -1,0 +1,40 @@
+{
+  "feature_names": [
+    "amount",
+    "log_amount",
+    "amount_to_balance_ratio",
+    "hour_of_day",
+    "type_CASH_IN",
+    "type_CASH_OUT",
+    "type_DEBIT",
+    "type_PAYMENT",
+    "type_TRANSFER",
+    "balance_error_orig",
+    "balance_error_dest",
+    "orig_drained_to_zero",
+    "dest_was_empty",
+    "dest_fanin_senders",
+    "dest_new_sender",
+    "dest_rapid_passthrough",
+    "orig_rapid_passthrough",
+    "orig_prior_txn_count",
+    "dest_prior_inflow_count"
+  ],
+  "n_features": 19,
+  "thresholds": {
+    "review": 0.99,
+    "block": 0.999
+  },
+  "split_step": 523,
+  "trained_on": "paysim_sample.csv",
+  "feature_config": {
+    "fanin_window_steps": 12,
+    "passthrough_window_steps": 2,
+    "passthrough_ratio": 0.8
+  },
+  "platform": {
+    "machine": "s390x",
+    "python": "3.12.3",
+    "system": "Linux"
+  }
+}
