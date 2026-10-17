@@ -1,0 +1,29 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Generated data (regenerate with data/make_synthetic.py or data/prepare.py)
+data/*.csv
+!data/.gitkeep
+
+# Generated artifacts (regenerate with ./run_all.sh)
+artifacts/*
+!artifacts/.gitkeep
+
+# Runtime database
+scamshield.db
+scamshield.db-wal
+scamshield.db-shm
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

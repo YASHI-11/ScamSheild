@@ -1,0 +1,44 @@
+# ScamShield dependencies
+#
+# The IBM LinuxONE image
+#   registry.linuxone.cloud.marist.edu/l1cc/jupyterlab-image-s390x:latest
+# ALREADY ships pandas, numpy, scikit-learn and xgboost compiled for s390x.
+# Do NOT pip-install or upgrade those inside the container - you will trigger
+# a source build that either takes an hour or fails outright.
+#
+# Inside the container you only need:
+#     pip install --user streamlit plotly
+#
+# This file exists so the project installs cleanly on a laptop and so the
+# judges can see exactly what it depends on.
+
+# --- core: pre-installed on LinuxONE, install locally -----------------
+pandas>=2.0
+numpy>=1.24
+scikit-learn>=1.3
+xgboost>=2.0
+joblib>=1.3
+
+# --- dashboard: pip install these inside the container ----------------
+streamlit>=1.30
+plotly>=5.18
+
+# --- the precision/recall PNG (optional) ------------------------------
+# train.py always writes artifacts/pr_curve.csv; the PNG is written only if
+# matplotlib is importable, so this is a nice-to-have, not a requirement.
+matplotlib>=3.7
+
+# --- tests ------------------------------------------------------------
+pytest>=7.4
+
+# sqlite3 is in the Python standard library - nothing to install.
+#
+# DELIBERATELY NOT USED (no reliable s390x wheels, or simply not needed):
+#   shap          -> XGBoost's built-in pred_contribs=True gives TreeSHAP
+#   lightgbm      -> xgboost covers it
+#   kafka-python  -> stream.py replays from CSV into SQLite instead
+#   polars, pyarrow
+#
+# OPTIONAL, never required: onnxmltools + onnxruntime.  train.py attempts an
+# ONNX export inside try/except and carries on with the joblib model if they
+# are missing (which they usually are on s390x).
