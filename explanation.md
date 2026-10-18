@@ -25,9 +25,41 @@ stolen money. Every single transfer into it looks perfectly normal on its own.
 Only the shape of the whole picture gives it away.
 
 Most banks today use a fixed rule like *"flag payments over 200,000 that empty
-the account."* On our test data that rule catches **7%** of fraud and is
-**wrong 2 times out of 3** when it does fire. It annoys honest customers and
-misses nearly all the real criminals.
+the account."* On our test data that rule catches **1.7%** of fraud and is
+wrong **93 times out of 100** when it does fire. It annoys honest customers
+and misses nearly all the real criminals.
+
+### Five different crimes, not one
+
+ScamShield looks for five separate patterns, because they leave completely
+different traces:
+
+| Pattern | What happens |
+|---|---|
+| **Account takeover** | Someone drains the victim's balance to a mule, who cashes out within the hour |
+| **Mule collection** | One account takes money from 8–20 unrelated strangers in a few hours |
+| **Layering chain** | The money hops through 3–5 accounts in minutes — a *ring*, not one mule |
+| **Structuring** | One big transfer split into several payments, each parked just under the 200,000 rule |
+| **Social engineering** | A pensioner is on the phone to a fake "bank official" and sends their savings at 3am to an account they have never paid before |
+
+That last one is the one that matters most for protecting vulnerable people,
+and it is the hardest. **Both sides of the ledger balance perfectly.** There
+is no arithmetic mistake, no mule history, nothing wrong with the transaction
+at all. The only evidence is that it is wildly out of character *for that
+particular customer* — 300× their usual payment, at an hour they have never
+once transacted before. That is why ScamShield scores the sender's own
+history, not just the recipient's.
+
+### And some fraud leaves no trace whatsoever
+
+A stolen card used to buy something ordinary, at an ordinary shop, on a
+Tuesday afternoon. Nothing in the data tells you it was not the real
+cardholder. The bank finds out weeks later from a chargeback.
+
+Our data generator creates these deliberately. It makes the headline numbers
+look worse — and it is the reason they are worth anything. An earlier version
+of this project did not include them and reported 97% recall, which was a
+pleasant number about a world that does not exist.
 
 ---
 
@@ -59,9 +91,42 @@ For every payment, in under a millisecond:
    table — which is both the regulator's paper trail and the training data
    for the next model.
 
-**The human makes the final call.** ScamShield's job is to turn 30,000
-payments into a queue of about a dozen, and make each one readable in five
+**The human makes the final call.** ScamShield's job is to turn 11,000
+payments into a queue of about 20, and make each one readable in five
 seconds.
+
+### Three things it does that most fraud demos skip
+
+**1. It only queues what a human can actually work.**
+A fraud team has a fixed number of analysts. If you tune the model to catch
+95% of fraud on our data, it flags **a third of all payments** — a queue
+nobody could ever get through, so in practice the alerts get ignored and you
+catch nothing. So ScamShield caps the queue at **2% of traffic** and asks
+"what is the most fraud we can catch inside that?" The answer is 76%. That is
+a smaller number than a 95% target, and it is the one that would actually
+work on a Monday morning.
+
+**2. It keeps deciding when the model breaks.**
+A payment cannot wait for someone to restart a service. If the model starts
+failing, a circuit breaker trips, ScamShield falls back to the simple rule,
+and every one of those decisions is stamped `DEGRADED` so nobody later
+mistakes it for a model decision. It then tests the model again after two
+seconds and switches back automatically. Crucially, degraded mode is allowed
+to *ask a human* but never to *block a payment* — with no real score, blocking
+an honest customer is the one mistake you cannot justify. You can watch this
+happen on stage:
+
+```
+python stream.py --rate 300 --inject-failure 400:20
+```
+
+**3. It notices when it has gone stale.**
+Fraud is the one problem where the criminals actively change the inputs. A
+model that was excellent in January is quietly mediocre by June, and in the
+real world there are no labels to tell you — chargebacks arrive months later.
+ScamShield records what "normal" looked like during training and compares the
+live traffic against it on every refresh, showing a 🟢/🟡/🔴 light. Green
+means today's payments still look like the ones the model was tested on.
 
 ---
 
@@ -145,9 +210,57 @@ Run them on two ports (8501 and 8502) and you can show both.
 
 | | Old fixed rule | **ScamShield** |
 |---|---|---|
-| Fraud caught | 7% | **97%** |
-| False alarms | 80 | **3** |
-| Accuracy when it fires | 33% | **99%** |
+| Fraud caught | 1.7% | **76%** |
+| False alarms | 77 | **1** |
+| Accuracy when it fires | 7% | **99.6%** |
+
+76% rather than 97%, because roughly a fifth of the fraud in this data is the
+untraceable kind described above. Nothing could catch it from the payment
+alone.
+
+### In money, which is what a bank actually asks
+
+Precision and recall cannot go in a budget. So we priced every outcome — 150
+for an analyst to review an alert, 2,500 for wrongly blocking an honest
+customer, and the full amount for fraud that gets through:
+
+| | Cost per 1,000 payments |
+|---|---|
+| No fraud system at all | 3,228,396 |
+| The bank's current rule | 3,087,999 |
+| **ScamShield** | **176,866** |
+
+**About 94% cheaper than the rule banks run today.** (Those prices are our
+assumptions, set in one config file — change them and the answer changes. The
+point is to make the trade-off visible, not to claim one number.)
+
+### The uncomfortable finding we are reporting anyway
+
+I added nine new features for mule rings, payment bursts and victim-side
+behaviour. Then I wrote `ablation.py` to retrain the model with each group
+removed and measure whether they actually helped.
+
+**They did not — about +0.000 recall.**
+
+Two reasons, and both are worth knowing:
+
+- The queue size is fixed at 2%, so a better model mostly changes *which*
+  fraud gets caught, not how much. Per-pattern detection moved by up to 8
+  points while the total stayed flat.
+- Our synthetic data is too easy. Measured against legitimate traffic alone,
+  the *original* features already identify mule collection, layering and
+  structuring almost perfectly. There is nothing left for new features to
+  find. Real data has ambiguity that a generator cannot fake.
+
+The features stay, because they are correct, verified against an independent
+reference implementation, cost no measurable speed, and tell the analyst
+useful things ("this recipient sits in a 238-account network"). But the
+project does not claim they make it more accurate. Proving that needs real
+data, and that is the honest next step.
+
+Most hackathon projects would not have measured this. Measuring it, and
+reporting the answer when it was not the answer I wanted, is the part worth
+pointing at.
 
 ### Is the mainframe actually better than the laptop?
 
@@ -182,6 +295,13 @@ one thing a laptop benchmark can't fake.
 In one full run on LinuxONE, the system processed 30,537 payments in 5.1
 seconds and blocked **62,473,305** in fraud.
 
+> ⚠️ The LinuxONE speed figures above were measured with the earlier version
+> of the model (19 features, easier data). The *hardware* conclusion — Z's
+> flat latency tail — is unaffected, and the laptop benchmark shows the
+> extra features cost nothing measurable. But the detection numbers from
+> that Z run are out of date. Re-run `./run_all.sh` on the server to refresh
+> them before presenting those specific rows.
+
 ---
 
 ## 6. How the pieces fit together
@@ -213,9 +333,21 @@ Two supporting files do the clever bits:
 
 ## 7. Honest limitations
 
-- The data is **synthetic**. The near-perfect scores come from generated data
-  whose patterns are cleaner than real life. Running it on the real Kaggle
-  PaySim file is the next step, and the numbers will be lower.
+- The data is **synthetic**. The patterns are cleaner than real life. Running
+  it on the real Kaggle PaySim file is the single most valuable next step.
+- **The nine new features do not measurably improve detection here** (see
+  above). They are kept for correctness, analyst context and real-world
+  typology coverage, not on a claim of better accuracy.
+- **One shared queue starves the quieter scams.** Structuring and victim scams
+  are detectable, but mule patterns outrank them for the same 2% of analyst
+  capacity, so they rarely reach a human. The fix is a separate queue per scam
+  type, which is designed but not built.
+- The drift light watches the *risk scores*, not each feature individually. It
+  catches the common case; two features shifting in opposite directions could
+  hide from it.
+- The mule-ring graph **never forgets**. Clusters only grow, so on a long run
+  most mules end up in one big network. Realistic for a laundering ring, but a
+  production version needs a time-windowed graph.
 - The dashboard shows whether each payment was *really* fraud, because we're
   replaying a dataset where we know the answer. In the real world that column
   doesn't exist — which is exactly why the analyst feedback loop matters.
@@ -228,9 +360,19 @@ Two supporting files do the clever bits:
 
 > **"So what does it actually do?"**
 
-*"It scores every payment in under a millisecond, catches 97% of fraud instead
-of the 7% a normal bank rule catches, and instead of giving the analyst a risk
-score it gives them a sentence — 'this account took money from 14 strangers and
-forwarded it within minutes.' It runs on an IBM mainframe because a payment has
-a hard deadline, and the mainframe's slowest response was only 15% slower than
-its typical one, where my laptop's was four times slower."*
+*"It scores every payment in under a millisecond and catches 76% of the fraud
+inside a queue of just 2% of traffic — the amount a real analyst team can
+actually work — against 1.7% for the rule banks run today. Instead of a risk
+score it hands the analyst a sentence: 'this account took money from 14
+strangers and forwarded it within minutes.' It keeps deciding even when the
+model fails, it tells you when it has gone stale, and it runs on an IBM
+mainframe because a payment has a hard deadline — the mainframe's slowest
+response was 15% slower than its typical one, where my laptop's was four times
+slower."*
+
+And if they ask what you are least happy with:
+
+*"I added nine features for mule rings and victim behaviour, then measured
+whether they helped — and they didn't, because my synthetic data was already
+too easy for the original features. I left the measurement in the repo rather
+than quietly dropping it."*

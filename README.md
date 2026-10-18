@@ -14,7 +14,7 @@ life savings being funnelled to a criminal. Get it wrong one way and a victim is
 cleaned out before anyone can pick up a phone. Get it wrong the other way and
 you freeze an honest person's rent payment.
 
-Two things make this hard:
+Three things make this hard:
 
 1. **A single transaction rarely looks criminal.** The fraud lives in the
    _pattern_: an account that receives money from fourteen strangers in two
@@ -22,7 +22,26 @@ Two things make this hard:
    every individual transfer looks ordinary.
 2. **Static rules are terrible at it.** On our held-out data the classic bank
    rule — _amount > 200,000 AND the sender's account was drained_ — catches
-   **7%** of fraud while being **wrong two times out of three** when it fires.
+   **1.7%** of fraud while being wrong **93 times out of 100** when it fires.
+3. **Some fraud leaves no trace at all.** A compromised card used for an
+   ordinary-sized purchase at an ordinary merchant on a Tuesday afternoon is
+   invisible to any model, because nothing in the data distinguishes it from a
+   real purchase. Pretending otherwise is how fraud demos end up quoting 99%
+   recall. ScamShield's data generator emits those cases deliberately, which
+   is why the numbers in §5 are lower — and worth something.
+
+ScamShield models five distinct criminal patterns, not one:
+
+| Pattern                | What it looks like                                                            |
+| ---------------------- | ----------------------------------------------------------------------------- |
+| **Account takeover**   | Victim's balance drained to a mule, cashed out within the hour                 |
+| **Mule collection**    | One account receiving from 8–20 unrelated senders in a few hours               |
+| **Layering chain**     | Money hopping through 3–5 accounts in minutes — a **mule ring**, not one mule  |
+| **Structuring**        | One large transfer split into payments parked just under a reporting threshold |
+| **Social engineering** | A long-standing customer talked into one huge night-time payment to a new payee. **Both ledgers balance perfectly** — the only evidence is that it is out of character for *that* customer |
+
+That last row is the one that protects vulnerable people, and it is why
+ScamShield scores the sender's own history, not only the recipient's.
 
 ScamShield scores every payment in **well under a millisecond**, assigns one of three decisions,
 and — crucially — hands the ambiguous ones to a human **with a sentence
@@ -156,22 +175,24 @@ Open <http://localhost:8501>.
 
 ```bash
 python data/make_synthetic.py --rows 120000   # or: python data/prepare.py <paysim.csv>
-python train.py                               # time-split, trains, picks thresholds
+python train.py                               # time-split, trains, picks thresholds, prices them
+python ablation.py                            # what each feature group is actually worth
 python benchmark.py --rows 50000              # throughput + latency + platform.machine()
 python stream.py --rate 50                    # live replay into SQLite
-python -m pytest tests/ -q                    # the test suite
+python -m pytest tests/ -q                    # the test suite (52 tests)
 ```
 
 Useful flags:
 
-| Flag                      | Effect                                                     |
-| ------------------------- | ---------------------------------------------------------- |
-| `stream.py --rate 0`      | Replay as fast as the machine allows (benchmark mode)      |
-| `stream.py --limit 2000`  | Stop after N transactions                                  |
-| `stream.py --loop`        | Restart the feed when it ends — handy for a long demo      |
-| `stream.py --keep`        | Append to the existing database instead of starting fresh  |
-| `stream.py --no-warmup`   | Skip the account-history warm-up (faster, weaker features) |
-| `train.py --csv path.csv` | Train on a different sample                                |
+| Flag                                 | Effect                                                     |
+| ------------------------------------ | ---------------------------------------------------------- |
+| `stream.py --rate 0`                 | Replay as fast as the machine allows (benchmark mode)      |
+| `stream.py --limit 2000`             | Stop after N transactions                                  |
+| `stream.py --loop`                   | Restart the feed when it ends — handy for a long demo      |
+| `stream.py --keep`                   | Append to the existing database instead of starting fresh  |
+| `stream.py --no-warmup`              | Skip the account-history warm-up (faster, weaker features) |
+| `stream.py --inject-failure 400:20`  | **Simulate a model outage** — watch the circuit breaker trip and recover |
+| `train.py --csv path.csv`            | Train on a different sample                                |
 
 </details>
 
@@ -344,45 +365,117 @@ Raw output is in `artifacts/` and `linuxone_results/`.
 ### 5.1 Detection quality
 
 Held-out = the **latest 30% of time steps**, never seen during training.
-Figures below are the LinuxONE run (xgboost 2.0.3); the laptop run
-(xgboost 3.x) agrees to within 0.002 PR-AUC.
+Figures are the laptop run on the current 28-feature model.
 
-| Metric                               | Rule baseline | **ScamShield** |
-| ------------------------------------ | ------------- | -------------- |
-| Recall (fraud caught)                | 0.074         | **0.968**      |
-| Precision (alerts that were real)    | 0.333         | **0.994**      |
-| PR-AUC                               | —             | **0.9946**     |
-| ROC-AUC                              | —             | **0.9997**     |
-| Alerts raised per 30.5k transactions | 120           | **524**        |
-| False positives                      | 80            | **3**          |
+| Metric                            | Rule baseline | **ScamShield** |
+| --------------------------------- | ------------- | -------------- |
+| Recall @ REVIEW (fraud caught)    | 0.017         | **0.762**      |
+| Precision @ REVIEW                | 0.072         | **0.996**      |
+| Precision @ BLOCK                 | —             | **1.000**      |
+| PR-AUC                            | —             | **0.8402**     |
+| ROC-AUC                           | —             | **0.9585**     |
+| Alerts per 11.2k transactions     | 83            | **277**        |
+| False positives                   | 77            | **1**          |
+| Share of traffic sent to a human  | 0.74%         | **2.46%**      |
 
-<sub>Synthetic PaySim-shaped data: 102,048 rows, 1,702 fraud (1.67%),
-71,511 train / 30,537 test, split at step 523. Baseline =
+<sub>Synthetic PaySim-shaped data: 37,775 rows, 1,273 fraud (3.37%),
+26,504 train / 11,271 test, split at step 466. Baseline =
 `amount > 200,000 AND sender drained to zero`. Reproduce with `./run_all.sh`.</sub>
 
-> **Honest caveat:** these come from the _synthetic_ generator, whose fraud
-> patterns are cleaner than reality — treat them as a pipeline smoke test,
-> not a claim about real-world performance. The row below is the one that counts.
+Two things in that table are deliberate and worth reading twice.
+
+**Recall is 0.76, not 0.97.** The generator now emits a slice of fraud with
+_no detectable signal at all_ — a compromised card used for an ordinary-sized
+purchase at an ordinary merchant on a weekday afternoon. It is
+indistinguishable from a real purchase using only the data a payment switch
+can see; a real bank finds out weeks later from a chargeback. Earlier versions
+of this project did not generate those rows and scored 0.97 recall, which
+looked much better and meant much less.
+
+**Only 2.46% of traffic reaches a human**, because the REVIEW threshold is
+capped by analyst capacity rather than by a recall target. Insisting on 95%
+recall on this data queues roughly a third of all payments — a queue no team
+on earth can work. See §7 for why that cap is the honest design.
 
 | Dataset                             | PR-AUC | Recall @ REVIEW | Precision @ BLOCK | Rule-baseline recall |
 | ----------------------------------- | ------ | --------------- | ----------------- | -------------------- |
-| Synthetic (this repo, reproducible) | 0.9946 | 0.968           | 0.998             | 0.074                |
+| Synthetic (this repo, reproducible) | 0.8402 | 0.762           | 1.000             | 0.017                |
 | **Real Kaggle PaySim1 (6.3M rows)** | _TBD_  | _TBD_           | _TBD_             | _TBD_                |
 
 ### 5.2 What the model actually learned
 
-Top features by gain — note that **the two account-level "mule" features are
-doing a third of the work**, which is the entire thesis of the project:
+Top features by gain on the current model:
 
-| Rank | Feature                      | Gain      | What it means                                                     |
-| ---- | ---------------------------- | --------- | ----------------------------------------------------------------- |
-| 1    | `balance_error_dest`         | 0.368     | The recipient's ledger does not add up                            |
-| 2    | **`dest_fanin_senders`**     | **0.233** | **Distinct senders → one recipient in N hours (mule collection)** |
-| 3    | `type_CASH_OUT`              | 0.104     | The usual last hop before money disappears                        |
-| 4    | **`orig_rapid_passthrough`** | **0.063** | **Money forwarded on within K hours of arriving**                 |
-| 5    | `amount`                     | 0.054     | Size of the payment                                               |
-| 6    | `type_TRANSFER`              | 0.053     | Account-to-account                                                |
-| 7    | `orig_drained_to_zero`       | 0.043     | Sender emptied                                                    |
+| Rank | Feature                      | Gain      | What it means                                           |
+| ---- | ---------------------------- | --------- | ------------------------------------------------------- |
+| 1    | **`dest_rapid_passthrough`** | **0.231** | **Recipient has a history of forwarding money straight back out** |
+| 2    | `type_PAYMENT`               | 0.126     | Ordinary merchant payment (pushes risk down)             |
+| 3    | `balance_error_dest`         | 0.118     | The recipient's ledger does not add up                   |
+| 4    | `type_CASH_OUT`              | 0.091     | The usual last hop before money disappears               |
+| 5    | **`orig_rapid_passthrough`** | **0.048** | **Money forwarded on within K hours of arriving**        |
+| 6    | `dest_was_empty`             | 0.037     | Recipient account was empty beforehand                   |
+| 7    | **`orig_txns_in_window`**    | **0.036** | **Burst of payments from one sender (structuring)**      |
+
+The nine newer features (mule rings, velocity/structuring, victim side)
+account for **12.1% of total gain** between them, every one of them non-zero.
+Whether that translates into better _detection_ is a separate question, and
+the answer on this data is uncomfortable — §5.2b.
+
+### 5.2b Do the new features actually help? (`ablation.py`)
+
+Adding features is easy. Measuring whether they help is the part most projects
+skip, so `ablation.py` retrains the model with each feature group removed, on
+the identical split, and reports the difference.
+
+```bash
+python ablation.py          # ~10 s, writes artifacts/ablation.json
+```
+
+**Result: in aggregate, close to nothing.**
+
+| Configuration            | Features | PR-AUC | Recall @ 2% budget |
+| ------------------------ | -------- | ------ | ------------------ |
+| All 28 features          | 28       | 0.8402 | 0.624              |
+| without mule rings       | 25       | 0.8388 | 0.624              |
+| without velocity         | 25       | 0.8420 | 0.624              |
+| without victim side      | 25       | 0.8418 | 0.624              |
+| **Baseline 19 only**     | 19       | 0.8438 | 0.624              |
+
+The new features are worth **+0.000 recall and −0.004 PR-AUC**. That is the
+honest headline and it is reported here rather than buried.
+
+Two things explain it, and both are findings in their own right:
+
+1. **The alert budget binds, not the model.** At a fixed 2% cap the number of
+   alerts cannot grow, so a better model changes _which_ fraud fills the queue,
+   not how much fits in it. Per-typology recall moves by ±0.08 between
+   configurations while the total stays flat.
+2. **The synthetic data is already saturated.** Scoring each pattern against
+   legitimate traffic alone gives an isolated PR-AUC of ~1.00 for mule
+   collection, layering and structuring — _with the baseline 19 features_.
+   The generator cannot encode the ambiguity that makes ring and victim-side
+   features earn their keep on real data.
+
+| Pattern            | Cases | Recall (base → all) | Isolated PR-AUC (base → all) |
+| ------------------ | ----- | ------------------- | ---------------------------- |
+| mule_collection    | 111   | 0.892 → **0.973**   | 0.997 → 0.998                |
+| layering_chain     | 54    | 0.963 → 0.926       | 1.000 → 1.000                |
+| takeover           | 81    | 0.765 → 0.691       | 0.984 → **0.995**            |
+| structuring        | 32    | 0.406 → 0.375       | 0.997 → 0.995                |
+| social_engineering | 13    | 0.000 → 0.000       | 0.791 → 0.797                |
+| `no_signal`        | 71    | 0.000 → 0.000       | 0.019 → 0.016                |
+
+So the features stay in — they are correct, independently verified against a
+brute-force reference (§7), cost nothing measurable (§5.3), and give the
+analyst real context ("this recipient sits in a 238-account network"). But
+**this project does not claim they improve detection.** Settling that needs
+real data, which is the single most valuable next step.
+
+The last two rows are the operationally interesting ones: structuring and
+victim scams are clearly _separable_ (isolated PR-AUC 0.80–1.00) yet barely
+reach the queue, because mule patterns outrank them for the shared 2% budget.
+The fix is per-typology alert budgets — a scam-victim queue that cannot be
+starved by a mule queue. That is designed but not built; see §10.
 
 ### 5.3 Throughput and latency — **laptop vs LinuxONE**
 
@@ -439,12 +532,90 @@ every decision to SQLite:
 Test suite on s390x: **25 passed, 1 skipped** (the dashboard test skips
 cleanly when Streamlit is unavailable — see section 4).
 
-### 5.4 Cost of being wrong
+> ⚠️ **The s390x figures in §5.3 and §5.3b were measured with the earlier
+> 19-feature model and the earlier generator.** The hardware conclusion — Z's
+> flat latency tail — is unaffected, and the laptop benchmark shows no
+> measurable cost from going to 28 features (1,695 vs 1,458 txn/s; the
+> laptop's own run-to-run spread of 1.9× is larger than the difference). But
+> the detection numbers in §5.3b no longer match the current model. Re-run
+> `./run_all.sh` on the LinuxONE guest to refresh them.
 
-Over a single replay of the test window on LinuxONE the `BLOCK` tier stopped
-**62,473,305** in fraudulent payments, while 518K still got through. The dashboard tracks this live as
-_Money protected_, alongside _Money that still got through_ — because a fraud
-system that only reports its wins is not telling you the truth.
+### 5.4 Cost of being wrong, in currency
+
+Precision and recall cannot be put in a budget. `train.py` therefore prices
+every outcome and reports what the system costs to operate — the number a
+bank would actually be shown.
+
+| Price assumption                       | Value   |
+| -------------------------------------- | ------- |
+| One analyst review                     | 150     |
+| Wrongly blocking an honest customer    | 2,500   |
+| Fraud allowed through                  | the full amount |
+| Share of queued fraud an analyst spots | 90%     |
+
+| Approach                   | Cost per 1,000 payments |
+| -------------------------- | ----------------------- |
+| No fraud system at all     | 3,228,396               |
+| The bank's current rule    | 3,087,999               |
+| **ScamShield (as shipped)**| **176,866**             |
+| ScamShield (cost-tuned)    | 37,850                  |
+
+**94.3% cheaper than the rule banks run today.** The last row is what
+threshold selection would give if it optimised money instead of F1
+(review 0.089 / block 0.232); it is reported rather than applied, because
+the shipped thresholds are the ones the statistical targets chose and
+silently swapping them would be a different system from the one measured
+above.
+
+The sensitivity is worth stating plainly: these are _our_ price assumptions,
+set in `config.py`. Change `COST_FALSE_BLOCK` and the cheapest policy changes
+with it — on an earlier, more separable dataset the optimiser collapsed both
+thresholds together and recommended skipping human review entirely, which it
+reported as `cost_optimal_policy: block-only`. The point of the module is to
+make that trade-off explicit and tunable, not to claim one answer.
+
+The dashboard tracks _Money protected_ alongside _Money that still got
+through_, because a fraud system that only reports its wins is not telling
+you the truth.
+
+### 5.5 Staying up when the model fails
+
+A payment switch is not allowed to stop deciding. `scorer.py` runs scoring
+behind a circuit breaker; you can watch it happen:
+
+```bash
+python stream.py --rate 300 --inject-failure 400:20
+```
+
+| What you see                     | Measured                                     |
+| -------------------------------- | -------------------------------------------- |
+| Transactions that got a decision | **100%** — none dropped                      |
+| Decisions served in degraded mode| ~600, every one labelled `DEGRADED`          |
+| Auto-blocks while degraded       | **0** (by design — see §7)                   |
+| Recovery                         | automatic, one probe after a 2 s cooldown    |
+
+The dashboard's _Scoring mode_ card flips to `DEGRADED ⚠️` and back to
+`MODEL ✅`, and every affected row carries the badge in the queue, so the
+audit trail never passes a fallback-rule decision off as a model decision.
+
+### 5.6 Knowing when the model has gone stale
+
+Fraud is the one modelling problem whose adversary actively rewrites the input
+distribution, and in production there are no labels to tell you — chargebacks
+arrive months late. `monitor.py` compares the live score distribution against
+the one recorded at training time using the Population Stability Index, with
+the conventional bands (<0.10 stable, 0.10–0.25 moderate, >0.25 retrain).
+
+On a clean replay of the held-out window it reads **PSI 0.000 🟢**, which is
+the right answer and a useful sanity check: the live feed _is_ the reference
+window. `tests/test_monitoring.py` pins the other half of the behaviour —
+that a genuine distribution shift is detected, that resampling noise is not,
+and that PSI rises monotonically with the size of the shift.
+
+One correctness detail that mattered: degraded-mode decisions are excluded
+from the comparison. The fallback rule emits fixed pseudo-scores, and
+including a brief outage registered as "significant drift" when all it meant
+was that the model had been offline for two seconds.
 
 ---
 
@@ -456,12 +627,14 @@ ScamShield/
 ├── features.py               AccountState — SHARED by training and streaming.
 ├── scorer.py                 Loads the model; the per-transaction decision path.
 ├── explain.py                Contributions → one plain-English sentence.
+├── monitor.py                PSI drift detection — is the model going stale?
 ├── db.py                     SQLite schema + WAL connection helpers.
-├── train.py                  Time-split training, thresholds, rule baseline.
+├── train.py                  Time-split training, thresholds, cost model, rule baseline.
 ├── stream.py                 Real-time replay engine → scamshield.db.
+├── ablation.py               Retrains without each feature group; recall per scam typology.
 ├── app.py                    Streamlit analyst dashboard.
 ├── benchmark.py              Throughput / p50 / p95 / p99 / platform.machine().
-├── run_all.sh                prepare → train → benchmark.
+├── run_all.sh                prepare → train → ablation → benchmark.
 ├── requirements.txt
 ├── data/
 │   ├── prepare.py            Kaggle PaySim → 300k stratified sample (all fraud kept).
@@ -511,9 +684,10 @@ _end-to-end_ and _score only_ rows in the benchmark table.
 Not hand-picked. `train.py` reads them off the precision-recall curve of the
 held-out set:
 
-- **REVIEW** = the strictest threshold that still achieves
-  `TARGET_REVIEW_RECALL` (0.95). Optimises for _missing nothing_; a human
-  triages the queue.
+- **REVIEW** = the best recall achievable **within analyst capacity**
+  (`MAX_ALERT_RATE`, 2% of traffic). `TARGET_REVIEW_RECALL` (0.95) is the
+  aspiration; the capacity cap is the hard constraint, and `train.py` says
+  loudly which of the two actually set the threshold.
 - **BLOCK** = the loosest threshold whose precision reaches
   `TARGET_BLOCK_PRECISION` (0.95). Optimises for _never freezing an honest
   payment_, because that is the action taken without a human.
@@ -521,6 +695,66 @@ held-out set:
 Both are saved to `artifacts/model_metadata.json` and loaded by `scorer.py`, so
 the running system cannot drift from the evaluated one. Adjust the targets in
 `config.py` and re-run `train.py`.
+
+</details>
+
+<details>
+<summary><b>Why a capacity cap, and not just a recall target</b></summary>
+
+A recall target on its own is not implementable, and this is the design
+decision in the project that changed most under measurement.
+
+Aiming at 95% recall assumes every fraud is detectable. It is not — see
+`no_signal` in §5.2b, which is ~0% detectable by construction. Chasing those
+cases drags the threshold to the floor: on our own held-out data, insisting on
+95% recall queues **32% of all payments**. A hundred analysts could not work
+that queue, so in practice the alerts would be ignored and the system would
+catch nothing at all. A queue nobody can work is the same as no queue.
+
+So `MAX_ALERT_RATE` caps the share of traffic that may enter the queue, and
+the threshold becomes "the best recall available inside that budget". That is
+the way round a real fraud operation works: you have N analysts, they can work
+M alerts a day, and the model's job is to make those M alerts the right ones.
+
+The consequence runs through the whole results section: with the budget fixed,
+a better model mostly changes _which_ fraud is caught rather than how much,
+which is exactly what the ablation in §5.2b shows.
+
+</details>
+
+<details>
+<summary><b>Mule rings: union-find over pass-through edges only</b></summary>
+
+Criminals do not use one mule, they use a chain. `features.py` keeps a
+disjoint-set structure over accounts and unions two accounts **only** when
+money demonstrably passed straight through one to the other — the same
+rapid-pass-through condition the mule features use.
+
+The "only" is the whole trick. Unioning on every transfer would merge the
+entire customer base into one component within seconds and the feature would
+mean nothing; `test_ordinary_payments_do_not_create_a_ring` is there to stop
+anyone loosening it. With the edge condition as it stands, 94% of legitimate
+payments sit at ring size 1 while 62% of fraud sits in a cluster of 100+.
+
+Cost is a path-compressed `_find` per transaction, which does not show up in
+the benchmark. The honest weakness is that union-find cannot un-merge, so
+clusters only grow — see §10.
+
+</details>
+
+<details>
+<summary><b>Degraded mode asks a human; it never auto-blocks</b></summary>
+
+When the circuit breaker is open there is no calibrated probability, only a
+crude rule. Blocking a payment on that basis would punish honest customers at
+precisely the moment we are least able to justify the decision — so
+`rule_decision()` can return `ALLOW` or `REVIEW` and **never** `BLOCK`.
+Nothing is silently stopped, nothing is silently waved through, and
+`test_fallback_never_auto_blocks` fails the build if that changes.
+
+Every degraded decision is written with `decision_mode = 'DEGRADED'` and a
+summary that says so, because an audit trail that cannot distinguish a model
+decision from a fallback decision is not an audit trail.
 
 </details>
 
@@ -616,9 +850,35 @@ anywhere in this project.
 
 ## 10. Honest limitations
 
+- **The nine newer features do not measurably improve detection on this
+  data.** `ablation.py` measures it rather than assuming it, and the answer is
+  +0.000 recall / −0.004 PR-AUC (§5.2b). They are kept because they are
+  verified correct, cost nothing measurable, target documented AML typologies,
+  and give analysts real context — but the claim "they make it more accurate"
+  is not supported, and settling it needs real data.
+- **One shared alert budget starves the quieter typologies.** Structuring and
+  social-engineering scams are separable (isolated PR-AUC 0.80–1.00) yet
+  almost never reach the queue, because mule patterns outrank them for the
+  same 2% of capacity. Per-typology budgets — a victim-scam queue that a mule
+  queue cannot starve — is the right fix and is not built.
+- **The cost model is our assumptions, not a bank's.** The 94.3% saving in
+  §5.4 moves with `COST_REVIEW` and `COST_FALSE_BLOCK`. Treat the module as a
+  way to make the trade-off explicit, not as a validated figure.
 - **PaySim is synthetic.** Real fraud adapts; a model trained on a fixed
   simulation will degrade. In production this needs scheduled retraining fed by
   the `analyst_actions` table.
+- **Drift monitoring watches the score distribution, not the features.** PSI
+  on the scores is a good summary signal and catches the common case, but a
+  compensating shift across two features can leave the score distribution
+  unchanged. The per-feature references are recorded in
+  `artifacts/drift_reference.json` for offline investigation; the dashboard
+  does not yet chart them.
+- **The mule-ring union-find never forgets.** Pass-through edges accumulate
+  for the lifetime of the process, so clusters only ever grow — on a long
+  enough run most mules end up in one large component (238 accounts in the
+  current replay). That is realistic for a laundering network and still
+  discriminates (94% of legitimate payments sit at ring size 1), but a
+  production version needs a time-windowed graph, which union-find cannot do.
 - **The fan-in and pass-through windows (N=12, K=2 steps) are not tuned.** They
   were chosen as plausible defaults. They should be swept.
 - **`AccountState` grows without bound.** Fine for a 300k-row replay; a

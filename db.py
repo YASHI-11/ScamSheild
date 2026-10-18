@@ -28,12 +28,17 @@ CREATE TABLE IF NOT EXISTS transactions (
     summary     TEXT    NOT NULL,          -- plain-language sentence
     latency_ms  REAL    NOT NULL,          -- features + score, per transaction
     is_fraud    INTEGER NOT NULL,          -- ground truth, demo only
-    created_at  TEXT    NOT NULL
+    created_at  TEXT    NOT NULL,
+    decision_mode TEXT  NOT NULL DEFAULT 'MODEL',  -- MODEL | DEGRADED
+    expected_loss REAL  NOT NULL DEFAULT 0,        -- score * amount
+    ring_size   INTEGER NOT NULL DEFAULT 1         -- mule cluster size at scoring time
 );
 
 CREATE INDEX IF NOT EXISTS idx_txn_id       ON transactions(id DESC);
 CREATE INDEX IF NOT EXISTS idx_txn_decision ON transactions(decision);
 CREATE INDEX IF NOT EXISTS idx_txn_created  ON transactions(created_at);
+-- The review queue is ordered by money at risk, so give it an index.
+CREATE INDEX IF NOT EXISTS idx_txn_exploss  ON transactions(expected_loss DESC);
 
 CREATE TABLE IF NOT EXISTS analyst_actions (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,6 +60,36 @@ CREATE TABLE IF NOT EXISTS stream_meta (
 """
 
 
+# Columns added after the first version of the schema shipped.  CREATE TABLE
+# IF NOT EXISTS will not add them to a database that already exists, so a
+# database recorded by an earlier run (for example the LinuxONE evidence file)
+# has to be nudged forward.  ALTER TABLE ... ADD COLUMN with a default is
+# instant and does not touch any existing row's data.
+_MIGRATIONS = [
+    ("decision_mode", "TEXT NOT NULL DEFAULT 'MODEL'"),
+    ("expected_loss", "REAL NOT NULL DEFAULT 0"),
+    ("ring_size", "INTEGER NOT NULL DEFAULT 1"),
+]
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add any missing columns to an older transactions table."""
+    try:
+        existing = {r["name"] for r in conn.execute("PRAGMA table_info(transactions)")}
+    except sqlite3.Error:
+        return
+    if not existing:
+        return
+    for column, ddl in _MIGRATIONS:
+        if column not in existing:
+            try:
+                conn.execute(f"ALTER TABLE transactions ADD COLUMN {column} {ddl}")
+            except sqlite3.Error:
+                # A read-only file or a concurrent writer: the dashboard
+                # degrades to not showing that column rather than crashing.
+                pass
+
+
 def connect(path: Path | str = config.DB_PATH, *, read_only: bool = False) -> sqlite3.Connection:
     """
     Open the database in WAL mode.
@@ -71,6 +106,13 @@ def connect(path: Path | str = config.DB_PATH, *, read_only: bool = False) -> sq
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA busy_timeout=30000")
     if not read_only:
+        # Order matters.  _migrate() must run FIRST, because SCHEMA contains an
+        # index over expected_loss: on a database recorded before that column
+        # existed, CREATE INDEX fails with "no such column" and takes the whole
+        # connection down before the migration ever gets a chance to add it.
+        # _migrate() is a no-op on a brand-new file (no transactions table yet),
+        # so running it first is safe in both directions.
+        _migrate(conn)
         conn.executescript(SCHEMA)
         conn.commit()
     return conn

@@ -102,7 +102,13 @@ def test_synthetic_data_has_paysim_shape(pipeline):
     expected = ["step", "type", "amount", "nameOrig", "oldbalanceOrg",
                 "newbalanceOrig", "nameDest", "oldbalanceDest",
                 "newbalanceDest", "isFraud", "isFlaggedFraud"]
-    assert list(df.columns) == expected
+    # The PaySim columns must come first and be exactly right.  Our generator
+    # appends one extra column, fraud_type, naming the pattern that produced
+    # each row; ablation.py reports recall per pattern from it.  Nothing in
+    # the model pipeline reads it, and the real Kaggle file does not have it.
+    assert list(df.columns)[:len(expected)] == expected
+    assert set(df.columns) - set(expected) <= {"fraud_type"}
+    assert (df.loc[df["isFraud"] == 1, "fraud_type"] != "").all()
     assert len(df) > 1000
     assert df["isFraud"].isin([0, 1]).all()
     # Imbalanced, but not so much that training is impossible.
@@ -147,8 +153,74 @@ def test_prepare_keeps_all_fraud_and_the_type_mix(pipeline, tmp_path):
 # ----------------------------------------------------------------------
 def test_train_writes_all_artifacts(pipeline):
     for path in (config.MODEL_PATH, config.METADATA_PATH, config.METRICS_PATH,
-                 config.PR_CURVE_CSV, config.STREAM_CSV, config.WARMUP_CSV):
+                 config.PR_CURVE_CSV, config.STREAM_CSV, config.WARMUP_CSV,
+                 config.DRIFT_REFERENCE_PATH):
         assert path.exists(), f"{path} was not written by train.py"
+
+
+def test_cost_analysis_prices_the_model_against_the_rule(pipeline):
+    """
+    Precision and recall cannot be put in a budget; cost can.  The training
+    report has to price all three options, and ScamShield has to come out
+    cheaper than the rule a bank runs today - otherwise there is no business
+    case, whatever the PR-AUC says.
+    """
+    cost = json.loads(config.METRICS_PATH.read_text())["cost_analysis"]
+    total = cost["total_cost"]
+    assert total["do_nothing"] > 0
+    assert total["scamshield"] < total["rule_baseline"] < total["do_nothing"]
+    # The sweep cannot do worse than the thresholds we ship with.
+    assert total["scamshield_cost_optimal"] <= total["scamshield"] + 1e-6
+    assert cost["saving_vs_rule"] > 0
+    assert "COST OF OPERATING" in pipeline["train_out"]
+
+
+def test_review_queue_stays_inside_analyst_capacity(pipeline):
+    """
+    A queue nobody can work is the same as no queue at all.
+
+    Some fraud genuinely carries no signal, so chasing the recall target
+    drives the threshold to the floor.  The capacity cap is what stops that,
+    and this test is what stops the cap being quietly removed.
+    """
+    m = json.loads(config.METRICS_PATH.read_text())
+    flagged_rate = m["review_tier"]["flagged_rate"]
+    # A little slack: ties in the score distribution mean the cap cannot
+    # always be hit exactly.
+    assert flagged_rate <= config.MAX_ALERT_RATE * 2.5, (
+        f"{100 * flagged_rate:.1f}% of traffic queued for review - "
+        "no team could work that"
+    )
+    assert m["capacity"]["threshold_set_by"] in ("analyst capacity", "recall target")
+
+
+def test_ablation_groups_cover_every_feature():
+    """
+    The ablation study is only honest if its groups describe the real feature
+    set.  If someone adds a feature and forgets to put it in a group, the
+    study would silently stop measuring it.
+    """
+    import ablation
+
+    grouped = [f for group in ablation.GROUPS.values() for f in group]
+    assert len(grouped) == len(set(grouped)), "a feature is in two groups"
+    assert set(ablation.BASELINE_FEATURES) | set(grouped) == set(F.FEATURE_NAMES), (
+        "ablation.py does not account for every feature in features.py"
+    )
+    assert not set(ablation.BASELINE_FEATURES) & set(grouped)
+
+
+def test_drift_reference_describes_the_training_window(pipeline):
+    import monitor
+
+    reference = monitor.load_reference(config.DRIFT_REFERENCE_PATH)
+    assert reference is not None
+    assert reference["score"]["n"] > 0
+    assert len(reference["score"]["pct"]) >= 2
+    assert abs(sum(reference["score"]["pct"]) - 1.0) < 1e-6
+    # The reference must cover features that actually exist in the live code.
+    for name in reference["features"]:
+        assert name in F.FEATURE_NAMES
 
 
 def test_metadata_matches_the_live_feature_code(pipeline):
@@ -242,6 +314,97 @@ def test_stream_populates_the_database(pipeline):
     seqs = [r[0] for r in conn.execute("SELECT seq FROM transactions ORDER BY id")]
     assert seqs == list(range(1, rows + 1))
     conn.close()
+
+
+def test_stream_records_exposure_rings_and_mode(pipeline):
+    """The columns the dashboard prioritises and explains work from."""
+    import db as dbmod
+
+    conn = dbmod.connect(pipeline["db"])
+    bad = conn.execute("""
+        SELECT COUNT(*) FROM transactions
+        WHERE expected_loss < 0
+           OR ring_size < 1
+           OR decision_mode NOT IN ('MODEL', 'DEGRADED')
+    """).fetchone()[0]
+    assert bad == 0
+
+    # expected_loss is score x amount, which is what orders the queue.
+    row = conn.execute(
+        "SELECT score, amount, expected_loss FROM transactions "
+        "WHERE decision != 'ALLOW' ORDER BY expected_loss DESC LIMIT 1"
+    ).fetchone()
+    assert row["expected_loss"] == pytest.approx(row["score"] * row["amount"], rel=1e-3)
+
+    # A clean run must be entirely model-scored.
+    assert conn.execute(
+        "SELECT COUNT(*) FROM transactions WHERE decision_mode = 'DEGRADED'"
+    ).fetchone()[0] == 0
+    conn.close()
+
+
+def test_stream_keeps_deciding_when_the_model_fails(pipeline, tmp_path):
+    """
+    The availability guarantee, end to end.
+
+    We make the model raise for a stretch of transactions and assert that
+    (a) every single transaction still gets a decision, (b) those decisions
+    are labelled DEGRADED rather than passed off as model output, (c) nothing
+    is auto-blocked on the strength of the fallback rule, and (d) the engine
+    goes back to using the model afterwards.
+    """
+    import db as dbmod
+
+    # The run has to outlast the breaker's cooldown, or it would finish while
+    # the breaker is still open and we could not prove it recovers.
+    limit = 1200
+    rate = 300
+    assert limit / rate > config.BREAKER_COOLDOWN_SECONDS * 1.5
+
+    db_file = tmp_path / "degraded.db"
+    proc = run(["stream.py", "--rate", str(rate), "--limit", str(limit),
+                "--inject-failure", "150:12", "--db", str(db_file)],
+               ROOT, pipeline["home"])
+    assert proc.returncode == 0, proc.stdout
+
+    conn = dbmod.connect(db_file)
+    total = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
+    assert total == limit, "transactions went missing while the model was down"
+
+    modes = dict(conn.execute(
+        "SELECT decision_mode, COUNT(*) FROM transactions GROUP BY 1"))
+    assert modes.get("DEGRADED", 0) > 0, "the breaker never tripped"
+    assert modes.get("MODEL", 0) > 0, "the engine never recovered"
+
+    # Degraded decisions may ask a human, never block on their own.
+    assert conn.execute(
+        "SELECT COUNT(*) FROM transactions "
+        "WHERE decision_mode = 'DEGRADED' AND decision = 'BLOCK'"
+    ).fetchone()[0] == 0
+
+    # Every row has a decision, no matter which path produced it.
+    assert conn.execute(
+        "SELECT COUNT(*) FROM transactions WHERE decision IS NULL OR decision = ''"
+    ).fetchone()[0] == 0
+
+    # The engine recovered: model-scored rows continue after the degraded run.
+    last_degraded = conn.execute(
+        "SELECT MAX(id) FROM transactions WHERE decision_mode = 'DEGRADED'"
+    ).fetchone()[0]
+    after = conn.execute(
+        "SELECT COUNT(*) FROM transactions WHERE id > ? AND decision_mode = 'MODEL'",
+        (last_degraded,),
+    ).fetchone()[0]
+    assert after > 0, "the breaker stayed open for the rest of the run"
+
+    meta = dbmod.get_meta(conn)
+    health = json.loads(meta["health"])
+    assert health["breaker_trips"] >= 1
+    assert health["scored_degraded"] > 0
+    conn.close()
+
+    assert "injecting" in proc.stdout
+    assert "breaker" in proc.stdout.lower()
 
 
 def test_every_alert_carries_a_human_readable_reason(pipeline):

@@ -58,6 +58,44 @@ def _is_passthrough(rows: list[dict], j: int, account: str) -> bool:
     )
 
 
+def _passthrough_edges(rows: list[dict], i: int) -> list[tuple[str, str, float]]:
+    """Every (from, to, amount) pass-through hop in rows[0:i], brute force."""
+    edges = []
+    for j in range(i):
+        sender = rows[j]["nameOrig"]
+        if _is_passthrough(rows, j, sender):
+            edges.append((sender, rows[j]["nameDest"], rows[j]["amount"]))
+    return edges
+
+
+def _component(edges: list[tuple[str, str, float]], account: str) -> set[str]:
+    """Accounts reachable from `account` through pass-through hops."""
+    adjacency: dict[str, set[str]] = {}
+    for a, b, _amt in edges:
+        adjacency.setdefault(a, set()).add(b)
+        adjacency.setdefault(b, set()).add(a)
+    if account not in adjacency:
+        return set()
+    seen, stack = {account}, [account]
+    while stack:
+        node = stack.pop()
+        for nxt in adjacency.get(node, ()):
+            if nxt not in seen:
+                seen.add(nxt)
+                stack.append(nxt)
+    return seen
+
+
+def _ring(rows: list[dict], i: int, account: str) -> tuple[float, float]:
+    """(cluster size, money through the cluster) from first principles."""
+    edges = _passthrough_edges(rows, i)
+    members = _component(edges, account)
+    if not members:
+        return 1.0, 0.0
+    volume = sum(amt for a, b, amt in edges if a in members or b in members)
+    return float(len(members)), float(volume)
+
+
 def reference_features(rows: list[dict], i: int) -> dict[str, float]:
     """Every feature for row i, computed by scanning rows[0:i] only."""
     row = rows[i]
@@ -105,6 +143,46 @@ def reference_features(rows: list[dict], i: int) -> dict[str, float]:
     out["orig_rapid_passthrough"] = float(orig_pt)
     out["orig_prior_txn_count"] = float(sum(r["nameOrig"] == orig for r in past))
     out["dest_prior_inflow_count"] = float(sum(r["nameDest"] == dest for r in past))
+
+    # --- mule rings, by rebuilding the whole graph every time ---------
+    dest_size, dest_volume = _ring(rows, i, dest)
+    orig_size, _orig_volume = _ring(rows, i, orig)
+    out["dest_ring_size"] = dest_size
+    out["orig_ring_size"] = orig_size
+    out["dest_ring_volume"] = dest_volume
+
+    # --- velocity / structuring ---------------------------------------
+    # Outgoing payments only (CASH_IN credits the sender, it is not a payment
+    # they made), inside the velocity window.
+    sent_in_window = [
+        r for r in past
+        if r["nameOrig"] == orig and r["type"] != CASH_IN
+        and r["step"] > step - config.VELOCITY_WINDOW_STEPS
+    ]
+    out["orig_txns_in_window"] = float(len(sent_in_window))
+    out["orig_amount_in_window"] = float(sum(r["amount"] for r in sent_in_window))
+    out["amount_just_below_round"] = float(any(
+        t * (1.0 - config.STRUCTURING_BAND) <= amount < t
+        for t in config.STRUCTURING_THRESHOLDS
+    ))
+
+    # --- victim side ---------------------------------------------------
+    sent_ever = [r for r in past if r["nameOrig"] == orig and r["type"] != CASH_IN]
+    if sent_ever:
+        mean_amount = sum(r["amount"] for r in sent_ever) / len(sent_ever)
+        out["orig_amount_vs_mean"] = amount / (mean_amount + 1.0)
+        out["orig_amount_vs_max"] = amount / (max(r["amount"] for r in sent_ever) + 1.0)
+    else:
+        out["orig_amount_vs_mean"] = 1.0
+        out["orig_amount_vs_max"] = 1.0
+
+    # The hour mask is built from EVERY row this account originated,
+    # including CASH_IN, which is why it is not computed from sent_ever.
+    originated = [r for r in past if r["nameOrig"] == orig]
+    ever_at_night = any(r["step"] % 24 in config.NIGHT_HOURS for r in originated)
+    out["orig_first_time_night"] = float(
+        bool(sent_ever) and (step % 24) in config.NIGHT_HOURS and not ever_at_night
+    )
     return out
 
 
@@ -295,6 +373,166 @@ def test_warm_up_equals_full_replay(rows):
     full = AccountState()
     whole = np.array([full.process(t) for t in rows], dtype=np.float32)
     np.testing.assert_array_equal(continued, whole[split:])
+
+
+def test_mule_ring_grows_along_a_laundering_chain():
+    """
+    Money hopping victim -> A -> B -> C must link A, B and C into one cluster.
+
+    This is the feature that sees what no single transaction can: each hop on
+    its own is an ordinary transfer, but the chain is a laundering network.
+    """
+    size_idx = FEATURE_NAMES.index("dest_ring_size")
+    vol_idx = FEATURE_NAMES.index("dest_ring_volume")
+    state = AccountState()
+
+    def txn(step, orig, dest, amount):
+        return dict(step=step, type="TRANSFER", amount=amount, nameOrig=orig,
+                    oldbalanceOrg=amount, newbalanceOrig=0.0, nameDest=dest,
+                    oldbalanceDest=0.0, newbalanceDest=amount)
+
+    # The victim pays A.  Nobody has forwarded anything yet.
+    first = txn(1, "VICTIM", "A", 100_000.0)
+    assert state.features(first)[size_idx] == 1.0
+    state.update(first)
+
+    # A forwards 95% of it to B within the window -> edge A-B.
+    hop1 = txn(1, "A", "B", 95_000.0)
+    state.update(hop1)
+    assert state.ring_of("A") == (2, 95_000.0)
+
+    # B forwards it to C -> the cluster becomes {A, B, C}.
+    hop2 = txn(2, "B", "C", 90_000.0)
+    state.update(hop2)
+    size, volume = state.ring_of("C")
+    assert size == 3
+    assert volume == pytest.approx(185_000.0)
+
+    # A fourth, unrelated account sees none of this.
+    assert state.ring_of("STRANGER") == (1, 0.0)
+
+    # And a payment INTO the chain now reports the cluster it is joining.
+    probe = txn(3, "VICTIM2", "C", 50_000.0)
+    feats = state.features(probe)
+    assert feats[size_idx] == 3.0
+    assert feats[vol_idx] == pytest.approx(185_000.0)
+
+    assert state.largest_rings(1) == [(3, pytest.approx(185_000.0))]
+
+
+def test_ordinary_payments_do_not_create_a_ring():
+    """A transfer that is NOT forwarded on must never link accounts.
+
+    Without this the union-find would merge the entire customer base into one
+    component within seconds and the feature would be meaningless.
+    """
+    state = AccountState()
+    base = dict(type="TRANSFER", oldbalanceOrg=500_000.0, newbalanceOrig=400_000.0,
+                oldbalanceDest=0.0, newbalanceDest=100_000.0)
+    # B receives money but sits on it; then pays someone a tiny amount later.
+    state.update({**base, "step": 1, "amount": 100_000.0,
+                  "nameOrig": "A", "nameDest": "B"})
+    state.update({**base, "step": 9, "amount": 100.0,
+                  "nameOrig": "B", "nameDest": "C"})
+    assert state.ring_of("B") == (1, 0.0)
+    assert state.largest_rings() == []
+
+
+def test_structuring_band_boundaries():
+    """Amounts just under a reporting threshold are flagged; others are not."""
+    idx = FEATURE_NAMES.index("amount_just_below_round")
+    state = AccountState()
+
+    def flag(amount: float) -> float:
+        return float(state.features(dict(
+            step=5, type="TRANSFER", amount=amount, nameOrig="A",
+            oldbalanceOrg=10_000_000.0, newbalanceOrig=0.0, nameDest="B",
+            oldbalanceDest=0.0, newbalanceDest=amount))[idx])
+
+    # The 200,000 threshold with a 10% band covers [180,000 .. 200,000).
+    assert flag(195_000.0) == 1.0
+    assert flag(180_000.0) == 1.0      # inclusive lower edge
+    assert flag(200_000.0) == 0.0      # at the threshold, not under it
+    assert flag(179_999.0) == 0.0      # below the band
+    assert flag(250_000.0) == 0.0      # comfortably over, nothing to hide
+    assert flag(97_000.0) == 1.0       # the 100,000 threshold too
+
+
+def test_velocity_window_expires():
+    """Payments drop out of the burst count once they age past the window."""
+    n_idx = FEATURE_NAMES.index("orig_txns_in_window")
+    sum_idx = FEATURE_NAMES.index("orig_amount_in_window")
+
+    def at(step: int) -> tuple[float, float]:
+        state = AccountState(velocity_window_steps=3)
+        for s in (1, 2, 3):
+            state.update(dict(step=s, type="TRANSFER", amount=1000.0,
+                              nameOrig="A", oldbalanceOrg=9000.0,
+                              newbalanceOrig=8000.0, nameDest=f"D{s}",
+                              oldbalanceDest=0.0, newbalanceDest=1000.0))
+        feats = state.features(dict(step=step, type="TRANSFER", amount=50.0,
+                                    nameOrig="A", oldbalanceOrg=1000.0,
+                                    newbalanceOrig=950.0, nameDest="Z",
+                                    oldbalanceDest=0.0, newbalanceDest=50.0))
+        return float(feats[n_idx]), float(feats[sum_idx])
+
+    assert at(3) == (3.0, 3000.0)      # all three inside the window
+    assert at(4) == (2.0, 2000.0)      # the step-1 payment has aged out
+    assert at(6) == (0.0, 0.0)         # all of them have
+
+
+def test_victim_signals_fire_on_an_out_of_character_payment():
+    """
+    A customer with a long history of small daytime payments suddenly sends
+    everything at 3am.  Nothing about the single transaction is wrong - the
+    ledger balances - so only the behavioural features can catch it.
+    """
+    mean_idx = FEATURE_NAMES.index("orig_amount_vs_mean")
+    max_idx = FEATURE_NAMES.index("orig_amount_vs_max")
+    night_idx = FEATURE_NAMES.index("orig_first_time_night")
+    err_idx = FEATURE_NAMES.index("balance_error_orig")
+
+    state = AccountState()
+    # Twelve ordinary 1,000 payments, every one of them at 2pm.
+    for day in range(12):
+        state.update(dict(step=24 * day + 14, type="PAYMENT", amount=1000.0,
+                          nameOrig="GRAN", oldbalanceOrg=400_000.0,
+                          newbalanceOrig=399_000.0, nameDest="SHOP",
+                          oldbalanceDest=0.0, newbalanceDest=0.0))
+
+    # Then one 300,000 transfer at 3am to an account never paid before.
+    scam = dict(step=24 * 13 + 3, type="TRANSFER", amount=300_000.0,
+                nameOrig="GRAN", oldbalanceOrg=300_000.0, newbalanceOrig=0.0,
+                nameDest="MULE", oldbalanceDest=0.0, newbalanceDest=300_000.0)
+    feats = state.features(scam)
+
+    assert feats[err_idx] == 0.0                   # the arithmetic is perfect
+    assert feats[mean_idx] > 100                   # ~300x their usual payment
+    assert feats[max_idx] > 100                    # far beyond their record
+    assert feats[night_idx] == 1.0                 # first ever night payment
+
+    # A regular daytime payment from the same customer stays unremarkable.
+    normal = {**scam, "step": 24 * 13 + 14, "amount": 1200.0,
+              "newbalanceOrig": 298_800.0, "newbalanceDest": 1200.0}
+    quiet = state.features(normal)
+    assert quiet[mean_idx] < 2.0
+    assert quiet[night_idx] == 0.0
+
+
+def test_night_flag_does_not_fire_for_a_customer_who_always_pays_at_night():
+    """The signal is "out of character", not "at night"."""
+    idx = FEATURE_NAMES.index("orig_first_time_night")
+    state = AccountState()
+    for day in range(6):
+        state.update(dict(step=24 * day + 2, type="PAYMENT", amount=1000.0,
+                          nameOrig="NIGHTOWL", oldbalanceOrg=50_000.0,
+                          newbalanceOrig=49_000.0, nameDest="SHOP",
+                          oldbalanceDest=0.0, newbalanceDest=0.0))
+    feats = state.features(dict(step=24 * 7 + 3, type="PAYMENT", amount=1000.0,
+                                nameOrig="NIGHTOWL", oldbalanceOrg=40_000.0,
+                                newbalanceOrig=39_000.0, nameDest="SHOP",
+                                oldbalanceDest=0.0, newbalanceDest=0.0))
+    assert feats[idx] == 0.0
 
 
 def test_feature_vector_is_finite_and_right_shape(rows):

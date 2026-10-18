@@ -70,10 +70,63 @@ _TEMPLATES: dict[str, tuple[str | None, str | None]] = {
     "dest_prior_inflow_count": (
         "recipient is brand new to the network", "recipient is well established",
     ),
+    # --- mule ring / network ------------------------------------------------
+    "dest_ring_size": (
+        "recipient belongs to a cluster of {int_v} accounts that pass money "
+        "between themselves (mule network)",
+        None,
+    ),
+    "orig_ring_size": (
+        "sender belongs to a {int_v}-account pass-through cluster", None,
+    ),
+    "dest_ring_volume": (
+        "the recipient's cluster of accounts has already moved {money} "
+        "between its members",
+        None,
+    ),
+    # --- velocity / structuring --------------------------------------------
+    "orig_txns_in_window": (
+        "sender made {int_v} payments in the last "
+        f"{config.VELOCITY_WINDOW_STEPS} hours (unusual burst)",
+        "sender's payment rate is normal",
+    ),
+    "orig_amount_in_window": (
+        "sender has moved {money} in the last "
+        f"{config.VELOCITY_WINDOW_STEPS} hours",
+        None,
+    ),
+    "amount_just_below_round": (
+        "amount sits just under a reporting threshold - the classic sign of a "
+        "large transfer being split up (structuring)",
+        None,
+    ),
+    # --- victim side -------------------------------------------------------
+    "orig_amount_vs_mean": (
+        "payment is {mult} this customer's usual amount - out of character",
+        "amount is in line with this customer's normal behaviour",
+    ),
+    "orig_amount_vs_max": (
+        "largest payment this customer has ever made", None,
+    ),
+    "orig_first_time_night": (
+        "first payment this customer has ever made during the night", None,
+    ),
 }
 
 # Features whose *value* is money and should be formatted as currency.
 _MONEY_FEATURES = {"amount", "log_amount", "balance_error_orig", "balance_error_dest"}
+
+# Signals that only mean something above a floor.  A "cluster of 1 account" or
+# a payment 1.1x the usual size is noise, and putting noise in front of an
+# analyst is how they learn to ignore the queue.
+_MIN_VALUE_TO_MENTION: dict[str, float] = {
+    "dest_ring_size": 3.0,
+    "orig_ring_size": 3.0,
+    "dest_ring_volume": 1.0,
+    "orig_txns_in_window": 4.0,
+    "orig_amount_vs_mean": 3.0,
+    "orig_amount_vs_max": 1.0,
+}
 
 
 def format_money(value: float) -> str:
@@ -94,11 +147,17 @@ def _render(name: str, value: float, contribution: float) -> str | None:
     if not template:
         return None
 
-    # One-hot features only make sense when they are actually set.
+    # One-hot and flag features only make sense when they are actually set.
     if name.startswith("type_") and value <= 0:
         return None
     if name in ("orig_drained_to_zero", "dest_was_empty", "dest_new_sender",
-                "dest_rapid_passthrough", "orig_rapid_passthrough") and value <= 0:
+                "dest_rapid_passthrough", "orig_rapid_passthrough",
+                "amount_just_below_round", "orig_first_time_night") and value <= 0:
+        return None
+
+    # Do not report a signal that is technically present but trivially small.
+    floor = _MIN_VALUE_TO_MENTION.get(name)
+    if floor is not None and contribution >= 0 and value < floor:
         return None
 
     money = format_money(value if name not in ("log_amount",) else (2.718281828 ** value) - 1)
@@ -107,6 +166,7 @@ def _render(name: str, value: float, contribution: float) -> str | None:
         int_v=int(round(value)),
         money=money,
         pct=f"{min(value, 9.99) * 100:.0f}%",
+        mult=f"{value:,.0f}x" if value >= 2 else f"{value:.1f}x",
         hour=int(value) % 24,
     )
 

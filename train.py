@@ -25,6 +25,7 @@ import json
 import platform
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -42,6 +43,7 @@ import joblib
 
 import config
 import features as F
+import monitor
 
 
 # ----------------------------------------------------------------------
@@ -61,12 +63,21 @@ def _metrics_at(y_true: np.ndarray, scores: np.ndarray, threshold: float) -> dic
     }
 
 
-def _pick_thresholds(y_true: np.ndarray, scores: np.ndarray) -> tuple[float, float]:
+def _pick_thresholds(y_true: np.ndarray, scores: np.ndarray) -> tuple[float, float, bool]:
     """
-    REVIEW = the strictest threshold that still catches TARGET_REVIEW_RECALL
-             of the fraud (humans then triage the queue).
+    REVIEW = the best recall achievable WITHIN the analyst team's capacity.
     BLOCK  = the loosest threshold whose precision is at least
              TARGET_BLOCK_PRECISION (safe enough to stop the payment itself).
+
+    Returns (review, block, capacity_limited).
+
+    The capacity cap is the important part.  Aiming purely at
+    TARGET_REVIEW_RECALL assumes every fraud is detectable, and it is not:
+    a compromised card used for a normal-sized purchase at a normal merchant
+    looks exactly like a real one.  Chasing those cases drags the threshold
+    to the floor and queues a third of all traffic.  So we take the recall
+    target as an aspiration and MAX_ALERT_RATE as the hard constraint, which
+    is the way round a real fraud operation works.
     """
     precision, recall, thresholds = precision_recall_curve(y_true, scores)
     # precision_recall_curve returns len(thresholds) == len(precision) - 1
@@ -74,6 +85,12 @@ def _pick_thresholds(y_true: np.ndarray, scores: np.ndarray) -> tuple[float, flo
 
     ok_recall = np.where(recall >= config.TARGET_REVIEW_RECALL)[0]
     review = float(thresholds[ok_recall[-1]]) if len(ok_recall) else config.DEFAULT_REVIEW_THRESHOLD
+
+    # Capacity constraint: never queue more than MAX_ALERT_RATE of traffic.
+    budget_threshold = float(np.quantile(scores, 1.0 - config.MAX_ALERT_RATE))
+    capacity_limited = review < budget_threshold
+    if capacity_limited:
+        review = budget_threshold
 
     ok_precision = np.where(precision >= config.TARGET_BLOCK_PRECISION)[0]
     block = float(thresholds[ok_precision[0]]) if len(ok_precision) else config.DEFAULT_BLOCK_THRESHOLD
@@ -83,7 +100,71 @@ def _pick_thresholds(y_true: np.ndarray, scores: np.ndarray) -> tuple[float, flo
     block = float(min(max(block, review), 0.999))
     if block <= review:
         block = min(0.999, max(review + 0.05, review * 1.5))
-    return review, block
+    return review, block, capacity_limited
+
+
+def _expected_cost(
+    y_true: np.ndarray,
+    scores: np.ndarray,
+    amounts: np.ndarray,
+    review: float,
+    block: float,
+) -> float:
+    """
+    What this operating point would COST the bank, in currency.
+
+    Three tiers, three different prices:
+
+      BLOCK  stopped automatically.  Fraud stopped costs nothing; an honest
+             customer stopped costs COST_FALSE_BLOCK (support call, a lost
+             payment, sometimes a lost customer).
+      REVIEW an analyst works it: COST_REVIEW of someone's time.  They are
+             good but not perfect, so we only credit them with catching
+             ANALYST_CATCH_RATE of the fraud they are shown.
+      ALLOW  fraud that gets through costs the full amount.
+
+    This is the function that actually matters.  Precision and recall are
+    proxies for it, and they are proxies that disagree with it, because the
+    price of the two mistakes differs by three orders of magnitude.
+    """
+    fraud = y_true == 1
+    is_block = scores >= block
+    is_review = (scores >= review) & ~is_block
+    is_allow = ~is_block & ~is_review
+
+    leak = config.COST_MISSED_FRAUD_RATIO
+    missed_share = 1.0 - config.ANALYST_CATCH_RATE
+
+    cost = config.COST_FALSE_BLOCK * float(np.count_nonzero(is_block & ~fraud))
+    cost += config.COST_REVIEW * float(np.count_nonzero(is_review))
+    cost += leak * missed_share * float(amounts[is_review & fraud].sum())
+    cost += leak * float(amounts[is_allow & fraud].sum())
+    return float(cost)
+
+
+def _optimise_cost(
+    y_true: np.ndarray, scores: np.ndarray, amounts: np.ndarray
+) -> tuple[float, float, float]:
+    """
+    Sweep the threshold pair and return the cheapest (review, block, cost).
+
+    A coarse quantile grid is enough: the cost surface is flat near its
+    minimum, so chasing the fourth decimal place of a threshold buys nothing
+    and would just overfit the test window.
+    """
+    grid = np.unique(np.quantile(scores, np.linspace(0.50, 0.99999, 50)))
+    grid = grid[(grid > 0.0) & (grid < 1.0)]
+    if grid.size == 0:
+        return (config.DEFAULT_REVIEW_THRESHOLD, config.DEFAULT_BLOCK_THRESHOLD,
+                float("nan"))
+
+    best = (float(grid[0]), float(grid[-1]), float("inf"))
+    for review in grid:
+        for block in grid[grid >= review]:
+            cost = _expected_cost(y_true, scores, amounts, float(review), float(block))
+            if cost < best[2]:
+                best = (float(review), float(block), cost)
+    return best
 
 
 def _rule_baseline(df: pd.DataFrame) -> np.ndarray:
@@ -234,7 +315,7 @@ def main() -> int:
     except ValueError:
         roc_auc = float("nan")
 
-    review_thr, block_thr = _pick_thresholds(y_test, scores)
+    review_thr, block_thr, capacity_limited = _pick_thresholds(y_test, scores)
     review_m = _metrics_at(y_test, scores, review_thr)
     block_m = _metrics_at(y_test, scores, block_thr)
 
@@ -255,6 +336,76 @@ def main() -> int:
     money_blocked = float(amounts[(scores >= block_thr) & (y_test == 1)].sum())
     money_missed = float(amounts[(scores < block_thr) & (y_test == 1)].sum())
 
+    # --- 5b. the same question in currency -------------------------------
+    # Precision and recall cannot be added up or put in a budget.  Cost can.
+    n_test = max(int(test_mask.sum()), 1)
+    per_1k = 1000.0 / n_test
+
+    cost_do_nothing = float(config.COST_MISSED_FRAUD_RATIO * amounts[y_test == 1].sum())
+    cost_model = _expected_cost(y_test, scores, amounts, review_thr, block_thr)
+    cost_review_thr, cost_block_thr, cost_optimal = _optimise_cost(
+        y_test, scores, amounts
+    )
+
+    # The rule baseline, priced the same way: whatever it flags goes to an
+    # analyst, and everything it misses is lost.
+    rule_flagged = rule_pred.astype(bool)
+    cost_rule = (
+        config.COST_REVIEW * float(rule_flagged.sum())
+        + config.COST_MISSED_FRAUD_RATIO * (1.0 - config.ANALYST_CATCH_RATE)
+        * float(amounts[rule_flagged & (y_test == 1)].sum())
+        + config.COST_MISSED_FRAUD_RATIO
+        * float(amounts[~rule_flagged & (y_test == 1)].sum())
+    )
+
+    cost_analysis = {
+        "assumptions": {
+            "cost_per_review": config.COST_REVIEW,
+            "cost_per_false_block": config.COST_FALSE_BLOCK,
+            "missed_fraud_ratio": config.COST_MISSED_FRAUD_RATIO,
+            "analyst_catch_rate": config.ANALYST_CATCH_RATE,
+        },
+        "test_rows": n_test,
+        "total_cost": {
+            "do_nothing": round(cost_do_nothing, 2),
+            "rule_baseline": round(cost_rule, 2),
+            "scamshield": round(cost_model, 2),
+            "scamshield_cost_optimal": round(cost_optimal, 2),
+        },
+        "cost_per_1000_payments": {
+            "do_nothing": round(cost_do_nothing * per_1k, 2),
+            "rule_baseline": round(cost_rule * per_1k, 2),
+            "scamshield": round(cost_model * per_1k, 2),
+            "scamshield_cost_optimal": round(cost_optimal * per_1k, 2),
+        },
+        "saving_vs_rule": round(cost_rule - cost_model, 2),
+        "saving_vs_rule_per_1000": round((cost_rule - cost_model) * per_1k, 2),
+        "saving_vs_rule_pct": (
+            round(100.0 * (cost_rule - cost_model) / cost_rule, 2) if cost_rule else None
+        ),
+        "cost_optimal_thresholds": {
+            "review": round(cost_review_thr, 6),
+            "block": round(cost_block_thr, 6),
+        },
+        # When the optimiser collapses the two thresholds onto each other it
+        # is telling us something real: at this precision, paying an analyst
+        # to confirm what the model already knows costs more than it saves.
+        # That is a property of THIS data, not a general result, so it is
+        # recorded rather than silently acted on.
+        "cost_optimal_policy": (
+            "block-only (precision is high enough that human review does not "
+            "pay for itself on this data)"
+            if cost_block_thr <= cost_review_thr
+            else "two-tier (review then block)"
+        ),
+        "note": (
+            "The statistical thresholds (recall/precision targets) are what the "
+            "engine ships with. The cost-optimal pair is reported alongside so "
+            "the operator can see what tuning for money instead of for F1 "
+            "would change."
+        ),
+    }
+
     curve_note = _save_pr_curve(y_test, scores, review_thr, block_thr)
     onnx_note = _try_export_onnx(model, X.shape[1])
 
@@ -270,8 +421,17 @@ def main() -> int:
     print(f"  ROC-AUC                    : {roc_auc:.4f}")
     print("-" * 72)
     print(f"  REVIEW tier  @ {review_thr:.4f}  precision {review_m['precision']:.3f}  "
-          f"recall {review_m['recall']:.3f}  ({review_m['flagged']:,} queued)")
+          f"recall {review_m['recall']:.3f}  ({review_m['flagged']:,} queued, "
+          f"{100 * review_m['flagged_rate']:.2f}% of traffic)")
     print(f"               {_cm(review_m)}")
+    if capacity_limited:
+        print(f"               NOTE: threshold set by analyst capacity "
+              f"(cap ~{100 * config.MAX_ALERT_RATE:g}% of traffic), not by the "
+              f"{100 * config.TARGET_REVIEW_RECALL:g}% recall target.")
+        print("               Some fraud in this data carries no detectable "
+              "signal at all, so chasing")
+        print("               the recall target would bury the team instead "
+              "of catching it.")
     print(f"  BLOCK  tier  @ {block_thr:.4f}  precision {block_m['precision']:.3f}  "
           f"recall {block_m['recall']:.3f}  ({block_m['flagged']:,} stopped)")
     print(f"               {_cm(block_m)}")
@@ -286,14 +446,35 @@ def main() -> int:
     print(f"  ML vs rules: +{lift_r * 100:.1f} recall points at REVIEW, "
           f"+{lift_p * 100:.1f} precision points at BLOCK")
     print(f"  Money auto-blocked in the test window: {money_blocked:,.0f}")
+    print("-" * 72)
+    c1k = cost_analysis["cost_per_1000_payments"]
+    print("  COST OF OPERATING, per 1,000 payments")
+    print(f"    no fraud system at all   : {c1k['do_nothing']:>12,.0f}")
+    print(f"    the bank's current rule  : {c1k['rule_baseline']:>12,.0f}")
+    print(f"    ScamShield (shipped)     : {c1k['scamshield']:>12,.0f}")
+    print(f"    ScamShield (cost-tuned)  : {c1k['scamshield_cost_optimal']:>12,.0f}"
+          f"   @ review {cost_review_thr:.3f} / block {cost_block_thr:.3f}")
+    if cost_analysis["saving_vs_rule_pct"] is not None:
+        print(f"    saving vs the rule       : {cost_analysis['saving_vs_rule_per_1000']:>12,.0f}"
+              f"   ({cost_analysis['saving_vs_rule_pct']:.1f}% cheaper)")
+    print(f"    priced at {config.COST_REVIEW:,.0f}/review, "
+          f"{config.COST_FALSE_BLOCK:,.0f}/false block, "
+          f"analysts catching {100 * config.ANALYST_CATCH_RATE:.0f}%")
+    print(f"    cheapest policy          : {cost_analysis['cost_optimal_policy']}")
     print("=" * 72 + "\n")
 
     # --- 7. persist -------------------------------------------------------
     joblib.dump(model, config.MODEL_PATH)
 
+    trained_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     metadata = {
         "feature_names": F.FEATURE_NAMES,
         "n_features": len(F.FEATURE_NAMES),
+        # Identifies this exact training run.  stream.py copies it into the
+        # database so the dashboard can tell whether a drift reference and a
+        # set of live scores came from the same model - comparing one model's
+        # scores against another model's reference is meaningless.
+        "trained_at": trained_at,
         "thresholds": {"review": review_thr, "block": block_thr},
         "split_step": split_step,
         "trained_on": csv_path.name,
@@ -314,6 +495,24 @@ def main() -> int:
         zip(F.FEATURE_NAMES, model.feature_importances_.tolist()),
         key=lambda kv: kv[1], reverse=True,
     )
+
+    # --- 7b. drift reference ---------------------------------------------
+    # Snapshot what "normal" looks like, measured on the held-out window, so
+    # the dashboard can tell later whether the live traffic still resembles
+    # the traffic this model was validated on.  See monitor.py.
+    drift_features = [name for name, _gain in importances[:8]]
+    reference = {
+        "trained_at": trained_at,
+        "machine": platform.machine(),
+        "trained_on": csv_path.name,
+        "bins": config.DRIFT_BINS,
+        "score": monitor.build_reference(scores),
+        "features": {
+            name: monitor.build_reference(X_test[:, F.FEATURE_NAMES.index(name)])
+            for name in drift_features
+        },
+    }
+    monitor.save_reference(reference)
     metrics = {
         "dataset": {
             "file": csv_path.name,
@@ -340,11 +539,18 @@ def main() -> int:
         "scores": {"pr_auc": round(pr_auc, 4), "roc_auc": round(roc_auc, 4)},
         "review_tier": review_m,
         "block_tier": block_m,
+        "capacity": {
+            "max_alert_rate": config.MAX_ALERT_RATE,
+            "threshold_set_by": "analyst capacity" if capacity_limited else "recall target",
+            "target_review_recall": config.TARGET_REVIEW_RECALL,
+            "achieved_review_recall": review_m["recall"],
+        },
         "rule_baseline": rule_m,
         "money": {
             "auto_blocked_in_test_window": round(money_blocked, 2),
             "missed_in_test_window": round(money_missed, 2),
         },
+        "cost_analysis": cost_analysis,
         "feature_importance_top10": [
             {"feature": f, "gain": round(g, 5)} for f, g in importances[:10]
         ],
@@ -362,6 +568,7 @@ def main() -> int:
     print(f"[train] model      -> {config.MODEL_PATH}")
     print(f"[train] metadata   -> {config.METADATA_PATH}")
     print(f"[train] metrics    -> {config.METRICS_PATH}")
+    print(f"[train] drift ref  -> {config.DRIFT_REFERENCE_PATH}")
     print(f"[train] pr curve   -> {curve_note}")
     print(f"[train] onnx       -> {onnx_note}")
     print(f"[train] stream feed-> {config.STREAM_CSV} ({test_mask.sum():,} rows)")

@@ -42,8 +42,9 @@ from scorer import ALLOW, BLOCK, REVIEW, Scorer
 INSERT_SQL = """
 INSERT INTO transactions
     (seq, step, type, amount, name_orig, name_dest, score, decision,
-     reasons, summary, latency_ms, is_fraud, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     reasons, summary, latency_ms, is_fraud, created_at,
+     decision_mode, expected_loss, ring_size)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 _stop = False
@@ -67,7 +68,22 @@ def main() -> int:
     ap.add_argument("--keep", action="store_true", help="append to the existing database")
     ap.add_argument("--db", type=str, default=str(config.DB_PATH))
     ap.add_argument("--loop", action="store_true", help="restart from the top when the feed ends")
+    ap.add_argument("--inject-failure", type=str, default="",
+                    help="demo the circuit breaker: START:COUNT simulates a "
+                         "model outage lasting COUNT transactions, beginning "
+                         "at transaction START, e.g. --inject-failure 500:20")
     args = ap.parse_args()
+
+    # Parse the failure-injection spec up front so a typo fails fast.
+    fail_at, fail_count = 0, 0
+    if args.inject_failure:
+        try:
+            fail_at_s, fail_count_s = args.inject_failure.split(":")
+            fail_at, fail_count = int(fail_at_s), int(fail_count_s)
+        except ValueError:
+            print("[stream] ERROR: --inject-failure wants START:COUNT, "
+                  "e.g. 500:40", file=sys.stderr)
+            return 1
 
     signal.signal(signal.SIGINT, _handle_sigint)
 
@@ -112,6 +128,11 @@ def main() -> int:
     db.set_meta(conn, "block_threshold", f"{scorer.block_threshold:.6f}")
     db.set_meta(conn, "feed_rows", str(len(feed)))
     db.set_meta(conn, "target_rate", str(args.rate))
+    db.set_meta(conn, "latency_budget_ms", str(config.LATENCY_BUDGET_MS))
+    # Stamp which model produced these rows.  The dashboard refuses to compute
+    # drift unless this matches the model that wrote the drift reference.
+    db.set_meta(conn, "n_features", str(len(F.FEATURE_NAMES)))
+    db.set_meta(conn, "model_trained_at", str(scorer.metadata.get("trained_at", "")))
     db.set_meta(conn, "started_at", datetime.now(timezone.utc).isoformat(timespec="seconds"))
     db.set_meta(conn, "status", "running")
     conn.commit()
@@ -123,6 +144,10 @@ def main() -> int:
     counts = {ALLOW: 0, REVIEW: 0, BLOCK: 0}
     latencies: list[float] = []
     money_blocked = 0.0
+    money_at_risk = 0.0            # expected loss sitting in the review queue
+    slo_breaches = 0               # transactions slower than the latency budget
+    budget_ms = config.LATENCY_BUDGET_MS
+    largest_ring = 1
     pending = 0
     started = time.perf_counter()
     next_due = started
@@ -150,6 +175,13 @@ def main() -> int:
             is_fraud = int(truth[i])
             i += 1
 
+            # Demo hook: trip the circuit breaker on cue so the degraded-mode
+            # behaviour can be shown live rather than just described.
+            if fail_count and processed == fail_at:
+                scorer.inject_failures = fail_count
+                print(f"[stream] !! injecting {fail_count} scoring failures "
+                      f"at transaction {processed} - watch the breaker trip")
+
             # ---- the measured real-time path --------------------------
             t0 = time.perf_counter()
             result = scorer.process(txn)
@@ -161,8 +193,14 @@ def main() -> int:
             decision = result["decision"]
             counts[decision] += 1
             latencies.append(latency_ms)
+            if latency_ms > budget_ms:
+                slo_breaches += 1
             if decision == BLOCK and is_fraud:
                 money_blocked += float(txn["amount"])
+            if decision != ALLOW:
+                money_at_risk += result["expected_loss"]
+            if result["ring_size"] > largest_ring:
+                largest_ring = result["ring_size"]
 
             conn.execute(INSERT_SQL, (
                 seq,
@@ -178,6 +216,9 @@ def main() -> int:
                 round(latency_ms, 4),
                 is_fraud,
                 datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+                result["mode"],
+                round(result["expected_loss"], 2),
+                result["ring_size"],
             ))
             pending += 1
 
@@ -192,9 +233,19 @@ def main() -> int:
             if now - last_report >= 2.0:
                 elapsed = now - started
                 arr = np.asarray(latencies[-5000:])
+                health = scorer.health()
+                breaker = health["breaker_state"]
+                flag = "" if breaker == "closed" else f" | BREAKER {breaker.upper()}"
                 print(f"[stream] {processed:>7,} txns | {processed / elapsed:7.1f} txn/s | "
                       f"p50 {np.percentile(arr, 50):.2f}ms p95 {np.percentile(arr, 95):.2f}ms | "
-                      f"ALLOW {counts[ALLOW]:,} REVIEW {counts[REVIEW]:,} BLOCK {counts[BLOCK]:,}")
+                      f"ALLOW {counts[ALLOW]:,} REVIEW {counts[REVIEW]:,} "
+                      f"BLOCK {counts[BLOCK]:,}{flag}")
+                # Publish health so the dashboard can show it without having
+                # to infer anything from the transaction rows.
+                db.set_meta(conn, "health", json.dumps(health))
+                db.set_meta(conn, "slo_breaches", str(slo_breaches))
+                db.set_meta(conn, "largest_ring", str(largest_ring))
+                db.set_meta(conn, "money_at_risk", f"{money_at_risk:.2f}")
                 last_report = now
 
             # ---- rate limiting (deadline based, so it does not drift) --
@@ -224,10 +275,22 @@ def main() -> int:
             },
             "decisions": counts,
             "money_blocked": round(money_blocked, 2),
+            "money_at_risk_queued": round(money_at_risk, 2),
+            "slo": {
+                "budget_ms": budget_ms,
+                "breaches": slo_breaches,
+                "breach_rate": round(slo_breaches / max(processed, 1), 6),
+            },
+            "resilience": scorer.health(),
+            "largest_mule_ring": largest_ring,
             "machine": platform.machine(),
         }
         db.set_meta(conn, "status", "finished")
         db.set_meta(conn, "summary", json.dumps(summary))
+        db.set_meta(conn, "health", json.dumps(scorer.health()))
+        db.set_meta(conn, "slo_breaches", str(slo_breaches))
+        db.set_meta(conn, "largest_ring", str(largest_ring))
+        db.set_meta(conn, "money_at_risk", f"{money_at_risk:.2f}")
         conn.commit()
         conn.close()
 
@@ -241,6 +304,14 @@ def main() -> int:
         print(f"  decisions        : ALLOW {counts[ALLOW]:,} | "
               f"REVIEW {counts[REVIEW]:,} | BLOCK {counts[BLOCK]:,}")
         print(f"  money protected  : {money_blocked:,.0f} (fraud correctly blocked)")
+        print(f"  money at risk    : {money_at_risk:,.0f} (expected loss in the queue)")
+        print(f"  latency SLO      : {slo_breaches:,} of {processed:,} over "
+              f"{budget_ms:g} ms ({100 * slo_breaches / max(processed, 1):.3f}%)")
+        h = summary["resilience"]
+        print(f"  resilience       : breaker {h['breaker_state']}, "
+              f"{h['breaker_trips']} trip(s), "
+              f"{h['scored_degraded']:,} decisions in degraded mode")
+        print(f"  largest mule ring: {largest_ring} accounts")
         print(f"  running on       : {platform.machine()} / Python {platform.python_version()}")
         print(f"  database         : {args.db}")
         print("=" * 68)
