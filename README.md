@@ -32,13 +32,13 @@ Three things make this hard:
 
 ScamShield models five distinct criminal patterns, not one:
 
-| Pattern                | What it looks like                                                            |
-| ---------------------- | ----------------------------------------------------------------------------- |
-| **Account takeover**   | Victim's balance drained to a mule, cashed out within the hour                 |
-| **Mule collection**    | One account receiving from 8–20 unrelated senders in a few hours               |
-| **Layering chain**     | Money hopping through 3–5 accounts in minutes — a **mule ring**, not one mule  |
-| **Structuring**        | One large transfer split into payments parked just under a reporting threshold |
-| **Social engineering** | A long-standing customer talked into one huge night-time payment to a new payee. **Both ledgers balance perfectly** — the only evidence is that it is out of character for *that* customer |
+| Pattern                | What it looks like                                                                                                                                                                         |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Account takeover**   | Victim's balance drained to a mule, cashed out within the hour                                                                                                                             |
+| **Mule collection**    | One account receiving from 8–20 unrelated senders in a few hours                                                                                                                           |
+| **Layering chain**     | Money hopping through 3–5 accounts in minutes — a **mule ring**, not one mule                                                                                                              |
+| **Structuring**        | One large transfer split into payments parked just under a reporting threshold                                                                                                             |
+| **Social engineering** | A long-standing customer talked into one huge night-time payment to a new payee. **Both ledgers balance perfectly** — the only evidence is that it is out of character for _that_ customer |
 
 That last row is the one that protects vulnerable people, and it is why
 ScamShield scores the sender's own history, not only the recipient's.
@@ -184,15 +184,15 @@ python -m pytest tests/ -q                    # the test suite (52 tests)
 
 Useful flags:
 
-| Flag                                 | Effect                                                     |
-| ------------------------------------ | ---------------------------------------------------------- |
-| `stream.py --rate 0`                 | Replay as fast as the machine allows (benchmark mode)      |
-| `stream.py --limit 2000`             | Stop after N transactions                                  |
-| `stream.py --loop`                   | Restart the feed when it ends — handy for a long demo      |
-| `stream.py --keep`                   | Append to the existing database instead of starting fresh  |
-| `stream.py --no-warmup`              | Skip the account-history warm-up (faster, weaker features) |
-| `stream.py --inject-failure 400:20`  | **Simulate a model outage** — watch the circuit breaker trip and recover |
-| `train.py --csv path.csv`            | Train on a different sample                                |
+| Flag                                | Effect                                                                   |
+| ----------------------------------- | ------------------------------------------------------------------------ |
+| `stream.py --rate 0`                | Replay as fast as the machine allows (benchmark mode)                    |
+| `stream.py --limit 2000`            | Stop after N transactions                                                |
+| `stream.py --loop`                  | Restart the feed when it ends — handy for a long demo                    |
+| `stream.py --keep`                  | Append to the existing database instead of starting fresh                |
+| `stream.py --no-warmup`             | Skip the account-history warm-up (faster, weaker features)               |
+| `stream.py --inject-failure 400:20` | **Simulate a model outage** — watch the circuit breaker trip and recover |
+| `train.py --csv path.csv`           | Train on a different sample                                              |
 
 </details>
 
@@ -367,16 +367,16 @@ Raw output is in `artifacts/` and `linuxone_results/`.
 Held-out = the **latest 30% of time steps**, never seen during training.
 Figures are the laptop run on the current 28-feature model.
 
-| Metric                            | Rule baseline | **ScamShield** |
-| --------------------------------- | ------------- | -------------- |
-| Recall @ REVIEW (fraud caught)    | 0.017         | **0.762**      |
-| Precision @ REVIEW                | 0.072         | **0.996**      |
-| Precision @ BLOCK                 | —             | **1.000**      |
-| PR-AUC                            | —             | **0.8402**     |
-| ROC-AUC                           | —             | **0.9585**     |
-| Alerts per 11.2k transactions     | 83            | **277**        |
-| False positives                   | 77            | **1**          |
-| Share of traffic sent to a human  | 0.74%         | **2.46%**      |
+| Metric                           | Rule baseline | **ScamShield** |
+| -------------------------------- | ------------- | -------------- |
+| Recall @ REVIEW (fraud caught)   | 0.017         | **0.762**      |
+| Precision @ REVIEW               | 0.072         | **0.996**      |
+| Precision @ BLOCK                | —             | **1.000**      |
+| PR-AUC                           | —             | **0.8402**     |
+| ROC-AUC                          | —             | **0.9585**     |
+| Alerts per 11.2k transactions    | 83            | **277**        |
+| False positives                  | 77            | **1**          |
+| Share of traffic sent to a human | 0.74%         | **2.46%**      |
 
 <sub>Synthetic PaySim-shaped data: 37,775 rows, 1,273 fraud (3.37%),
 26,504 train / 11,271 test, split at step 466. Baseline =
@@ -406,15 +406,15 @@ on earth can work. See §7 for why that cap is the honest design.
 
 Top features by gain on the current model:
 
-| Rank | Feature                      | Gain      | What it means                                           |
-| ---- | ---------------------------- | --------- | ------------------------------------------------------- |
+| Rank | Feature                      | Gain      | What it means                                                     |
+| ---- | ---------------------------- | --------- | ----------------------------------------------------------------- |
 | 1    | **`dest_rapid_passthrough`** | **0.231** | **Recipient has a history of forwarding money straight back out** |
-| 2    | `type_PAYMENT`               | 0.126     | Ordinary merchant payment (pushes risk down)             |
-| 3    | `balance_error_dest`         | 0.118     | The recipient's ledger does not add up                   |
-| 4    | `type_CASH_OUT`              | 0.091     | The usual last hop before money disappears               |
-| 5    | **`orig_rapid_passthrough`** | **0.048** | **Money forwarded on within K hours of arriving**        |
-| 6    | `dest_was_empty`             | 0.037     | Recipient account was empty beforehand                   |
-| 7    | **`orig_txns_in_window`**    | **0.036** | **Burst of payments from one sender (structuring)**      |
+| 2    | `type_PAYMENT`               | 0.126     | Ordinary merchant payment (pushes risk down)                      |
+| 3    | `balance_error_dest`         | 0.118     | The recipient's ledger does not add up                            |
+| 4    | `type_CASH_OUT`              | 0.091     | The usual last hop before money disappears                        |
+| 5    | **`orig_rapid_passthrough`** | **0.048** | **Money forwarded on within K hours of arriving**                 |
+| 6    | `dest_was_empty`             | 0.037     | Recipient account was empty beforehand                            |
+| 7    | **`orig_txns_in_window`**    | **0.036** | **Burst of payments from one sender (structuring)**               |
 
 The nine newer features (mule rings, velocity/structuring, victim side)
 account for **12.1% of total gain** between them, every one of them non-zero.
@@ -433,13 +433,13 @@ python ablation.py          # ~10 s, writes artifacts/ablation.json
 
 **Result: in aggregate, close to nothing.**
 
-| Configuration            | Features | PR-AUC | Recall @ 2% budget |
-| ------------------------ | -------- | ------ | ------------------ |
-| All 28 features          | 28       | 0.8402 | 0.624              |
-| without mule rings       | 25       | 0.8388 | 0.624              |
-| without velocity         | 25       | 0.8420 | 0.624              |
-| without victim side      | 25       | 0.8418 | 0.624              |
-| **Baseline 19 only**     | 19       | 0.8438 | 0.624              |
+| Configuration        | Features | PR-AUC | Recall @ 2% budget |
+| -------------------- | -------- | ------ | ------------------ |
+| All 28 features      | 28       | 0.8402 | 0.624              |
+| without mule rings   | 25       | 0.8388 | 0.624              |
+| without velocity     | 25       | 0.8420 | 0.624              |
+| without victim side  | 25       | 0.8418 | 0.624              |
+| **Baseline 19 only** | 19       | 0.8438 | 0.624              |
 
 The new features are worth **+0.000 recall and −0.004 PR-AUC**. That is the
 honest headline and it is reported here rather than buried.
@@ -546,19 +546,19 @@ Precision and recall cannot be put in a budget. `train.py` therefore prices
 every outcome and reports what the system costs to operate — the number a
 bank would actually be shown.
 
-| Price assumption                       | Value   |
-| -------------------------------------- | ------- |
-| One analyst review                     | 150     |
-| Wrongly blocking an honest customer    | 2,500   |
+| Price assumption                       | Value           |
+| -------------------------------------- | --------------- |
+| One analyst review                     | 150             |
+| Wrongly blocking an honest customer    | 2,500           |
 | Fraud allowed through                  | the full amount |
-| Share of queued fraud an analyst spots | 90%     |
+| Share of queued fraud an analyst spots | 90%             |
 
-| Approach                   | Cost per 1,000 payments |
-| -------------------------- | ----------------------- |
-| No fraud system at all     | 3,228,396               |
-| The bank's current rule    | 3,087,999               |
-| **ScamShield (as shipped)**| **176,866**             |
-| ScamShield (cost-tuned)    | 37,850                  |
+| Approach                    | Cost per 1,000 payments |
+| --------------------------- | ----------------------- |
+| No fraud system at all      | 3,228,396               |
+| The bank's current rule     | 3,087,999               |
+| **ScamShield (as shipped)** | **176,866**             |
+| ScamShield (cost-tuned)     | 37,850                  |
 
 **94.3% cheaper than the rule banks run today.** The last row is what
 threshold selection would give if it optimised money instead of F1
@@ -587,12 +587,12 @@ behind a circuit breaker; you can watch it happen:
 python stream.py --rate 300 --inject-failure 400:20
 ```
 
-| What you see                     | Measured                                     |
-| -------------------------------- | -------------------------------------------- |
-| Transactions that got a decision | **100%** — none dropped                      |
-| Decisions served in degraded mode| ~600, every one labelled `DEGRADED`          |
-| Auto-blocks while degraded       | **0** (by design — see §7)                   |
-| Recovery                         | automatic, one probe after a 2 s cooldown    |
+| What you see                      | Measured                                  |
+| --------------------------------- | ----------------------------------------- |
+| Transactions that got a decision  | **100%** — none dropped                   |
+| Decisions served in degraded mode | ~600, every one labelled `DEGRADED`       |
+| Auto-blocks while degraded        | **0** (by design — see §7)                |
+| Recovery                          | automatic, one probe after a 2 s cooldown |
 
 The dashboard's _Scoring mode_ card flips to `DEGRADED ⚠️` and back to
 `MODEL ✅`, and every affected row carries the badge in the queue, so the
@@ -817,34 +817,6 @@ never shows an empty reason.
 mobile-money transactions by Lopez-Rojas, Elmir & Axelsson, derived from real
 African mobile-money logs. Licensed CC BY-SA 4.0. No real customer data is used
 anywhere in this project.
-
----
-
-## 9. Three-minute demo video script
-
-**Total 3:00. Have both terminals already running before you hit record.**
-
-| Time          | Section                  | What is on screen                                                                                               | What you say                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **0:00–0:30** | **The problem**          | A slide: a UPI confirmation screen, and a clock showing 2 seconds.                                              | "A digital payment settles in two seconds. In that window a bank must decide: grocery bill, or a pensioner's savings going to a criminal? The fraud is almost never in one transaction — it's in the pattern. One account taking money from fourteen strangers in two hours and forwarding it within minutes is a money mule. Today most banks catch that with static rules. On our data, that rule finds **7%** of fraud and is wrong two times out of three."                                                                                                                                                                         |
-| **0:30–1:00** | **Data & approach**      | `features.py` on screen, scroll to `AccountState`. Then the architecture diagram.                               | "We use PaySim — 6.3 million synthetic mobile-money transactions. Transaction-level signals are the easy part. The interesting features are account-level and rolling: fan-in, rapid pass-through, account age. They're computed incrementally, so this one class runs in both training and production — no training/serving skew. We test that: a naive O(n²) reference gets the same numbers as the streaming version, row for row."                                                                                                                                                                                                  |
-| **1:00–2:00** | **Live demo** ⭐         | The dashboard, with `stream.py` visibly running beside it. Let the table scroll.                                | "This is live. Transactions are arriving and being scored right now. p50 latency: well under a millisecond. Green passes through, amber goes to a human, red is auto-blocked. Here's the point —" _(click a queue item)_ "— the analyst doesn't get a risk score of 0.97. They get: _'Account drained to zero; recipient received money from 14 different senders in 12 hours; money forwarded on within 2 hours of arriving.'_ Approve, Block, or Escalate." _(click Block)_ "Every press goes to an audit table — that's the regulator's trail and the next model's training data."                                                   |
-| **2:00–2:30** | **LinuxONE evidence** 🏆 | Zoom on the _Running on_ panel showing **s390x**. Then `cat artifacts/benchmark_linuxone.json` in the terminal. | "All of this ran on IBM LinuxONE. The dashboard reads `platform.machine()` from the process that did the scoring: **s390x**. Same code as my laptop, zero changes — the only architecture-specific line in the repo is the one that _measures_ the architecture. And it's not just faster, it's **steadier**: three identical runs on my laptop varied by nearly two times, and its p95 was up to four times its median. On Z, three runs landed within four percent, and p95 sat fifteen percent above p50. A payment has a hard deadline, so what matters isn't your best number — it's your worst one. That's the whole case for Z." |
-| **2:30–3:00** | **Impact & close**       | The _Money protected_ KPI, then the results table.                                                              | "Against the rule baseline: recall from 7% to 97%, false positives from 80 down to 3 — and in one replay on Z, **62.4 million** in fraud stopped before it left. Every blocked payment is a person who keeps their savings; every false positive we remove is an honest person not locked out of their own money. Real-time AI, a human making the critical call, and an audit trail for both. That's ScamShield."                                                                                                                                                                                                                      |
-
-**Recording tips**
-
-- Start `stream.py --rate 50 --loop` a minute before recording so the charts
-  have history and the queue is populated.
-- Turn **off** _Live refresh_ in the sidebar before clicking queue buttons, so
-  the page does not reload mid-click.
-- The money figure and the s390x badge are the two shots judges remember —
-  hold each for a full three seconds.
-- On a bare s390x box the dashboard runs on your laptop against the database
-  the Z engine wrote (section 4, Option A). It still reports **s390x**,
-  because that string comes from the machine that did the scoring. Say so
-  out loud — it is a stronger, more honest line than pretending the browser
-  is on Z.
 
 ---
 
